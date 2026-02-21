@@ -80,12 +80,26 @@ type PositionSnapshot struct {
 
 // SignalScore signal quality score breakdown
 type SignalScore struct {
-	Total             int    `json:"total"`              // Total score (0-100)
-	RSIScore          int    `json:"rsi_score"`          // RSI score (0-25)
-	EMAScore          int    `json:"ema_score"`          // EMA trend score (0-25)
-	VolumePriceScore  int    `json:"volume_price_score"` // Volume-price alignment score (0-20)
-	MultiTFScore      int    `json:"multi_tf_score"`     // Multi-timeframe resonance score (0-30)
-	Details           string `json:"details,omitempty"`  // Score details
+	Total            int    `json:"total"`              // Total score (0-100)
+	RSIScore         int    `json:"rsi_score"`          // RSI score (0-25)
+	EMAScore         int    `json:"ema_score"`          // EMA trend score (0-23)
+	VolumePriceScore int    `json:"volume_price_score"` // Volume-price alignment score (0-20)
+	MultiTFScore     int    `json:"multi_tf_score"`     // Multi-timeframe resonance score (0-30)
+	Details          string `json:"details,omitempty"`  // Score details
+
+	// Detailed sub-scores
+	RSIValue       float64 `json:"rsi_value,omitempty"`        // Current RSI value
+	EMAPosition    int     `json:"ema_position,omitempty"`     // EMA position score (0-8)
+	EMASlope       int     `json:"ema_slope,omitempty"`        // EMA slope score (0-8)
+	EMAAlignment   int     `json:"ema_alignment,omitempty"`    // EMA alignment score (0-7)
+	OIChange       int     `json:"oi_change,omitempty"`        // OI change score (0-12)
+	VolumeConfirm  int     `json:"volume_confirm,omitempty"`   // Volume confirmation score (0-8)
+	TrendConsist   int     `json:"trend_consist,omitempty"`    // Trend consistency score (0-20)
+	KeyPosition    int     `json:"key_position,omitempty"`     // Key position score (0-10)
+	OIChangePct    float64 `json:"oi_change_pct,omitempty"`    // OI change percentage
+	VolumeRatio    float64 `json:"volume_ratio,omitempty"`     // Volume ratio vs average
+	TrendDirection string  `json:"trend_direction,omitempty"`  // Trend direction
+	TrendTFCount   int     `json:"trend_tf_count,omitempty"`   // Number of timeframes with same trend
 }
 
 // TrendAnalysis trend analysis result

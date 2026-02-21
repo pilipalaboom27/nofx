@@ -63,10 +63,24 @@ export interface DecisionAction {
 export interface SignalScore {
   total: number           // Total score (0-100)
   rsi_score: number       // RSI score (0-25)
-  ema_score: number       // EMA trend score (0-25)
+  ema_score: number       // EMA trend score (0-23)
   volume_price_score: number  // Volume-price alignment score (0-20)
   multi_tf_score: number  // Multi-timeframe resonance score (0-30)
   details?: string        // Score details
+
+  // Detailed sub-scores
+  rsi_value?: number           // Current RSI value
+  ema_position?: number        // EMA position score (0-8)
+  ema_slope?: number           // EMA slope score (0-8)
+  ema_alignment?: number       // EMA alignment score (0-7)
+  oi_change?: number           // OI change score (0-12)
+  volume_confirm?: number      // Volume confirmation score (0-8)
+  trend_consist?: number       // Trend consistency score (0-20)
+  key_position?: number        // Key position score (0-10)
+  oi_change_pct?: number       // OI change percentage
+  volume_ratio?: number        // Volume ratio vs average
+  trend_direction?: string     // Trend direction
+  trend_tf_count?: number      // Number of timeframes with same trend
 }
 
 // Trend analysis result

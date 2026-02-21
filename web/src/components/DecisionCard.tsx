@@ -72,40 +72,129 @@ function SignalScoreDisplay({ score, language }: { score: SignalScore; language:
       className="rounded-lg p-3 mb-2"
       style={{ background: 'rgba(14, 203, 129, 0.05)', border: '1px solid rgba(14, 203, 129, 0.2)' }}
     >
-      <div className="flex items-center justify-between mb-2">
+      {/* Header with total score */}
+      <div className="flex items-center justify-between mb-3">
         <span className="text-xs font-medium" style={{ color: '#848E9C' }}>
           {language === 'zh' ? '📊 信号评分' : '📊 Signal Score'}
         </span>
         <div className="flex items-center gap-2">
-          <span className="font-bold text-lg" style={{ color: scoreColor }}>
+          <span className="font-bold text-xl" style={{ color: scoreColor }}>
             {score.total}
           </span>
           <span className="text-xs" style={{ color: '#848E9C' }}>/100</span>
         </div>
       </div>
 
-      {/* Score breakdown */}
-      <div className="grid grid-cols-4 gap-2 text-xs">
-        <div className="text-center">
-          <div className="font-mono" style={{ color: '#60a5fa' }}>{score.rsi_score}</div>
+      {/* Main score breakdown - 4 dimensions */}
+      <div className="grid grid-cols-4 gap-2 text-xs mb-3">
+        <div className="text-center p-2 rounded" style={{ background: 'rgba(96, 165, 250, 0.1)' }}>
+          <div className="font-mono font-bold text-base" style={{ color: '#60a5fa' }}>{score.rsi_score}</div>
           <div style={{ color: '#848E9C' }}>RSI</div>
+          <div className="text-[10px] mt-0.5" style={{ color: '#60a5fa' }}>
+            {score.rsi_value !== undefined ? score.rsi_value.toFixed(1) : '-'}
+          </div>
         </div>
-        <div className="text-center">
-          <div className="font-mono" style={{ color: '#0ECB81' }}>{score.ema_score}</div>
+        <div className="text-center p-2 rounded" style={{ background: 'rgba(14, 203, 129, 0.1)' }}>
+          <div className="font-mono font-bold text-base" style={{ color: '#0ECB81' }}>{score.ema_score}</div>
           <div style={{ color: '#848E9C' }}>EMA</div>
+          <div className="text-[10px] mt-0.5" style={{ color: '#0ECB81' }}>
+            /23
+          </div>
         </div>
-        <div className="text-center">
-          <div className="font-mono" style={{ color: '#F0B90B' }}>{score.volume_price_score}</div>
+        <div className="text-center p-2 rounded" style={{ background: 'rgba(240, 185, 11, 0.1)' }}>
+          <div className="font-mono font-bold text-base" style={{ color: '#F0B90B' }}>{score.volume_price_score}</div>
           <div style={{ color: '#848E9C' }}>{language === 'zh' ? '量价' : 'Vol'}</div>
+          <div className="text-[10px] mt-0.5" style={{ color: '#F0B90B' }}>
+            /20
+          </div>
         </div>
-        <div className="text-center">
-          <div className="font-mono" style={{ color: '#a855f7' }}>{score.multi_tf_score}</div>
+        <div className="text-center p-2 rounded" style={{ background: 'rgba(168, 85, 247, 0.1)' }}>
+          <div className="font-mono font-bold text-base" style={{ color: '#a855f7' }}>{score.multi_tf_score}</div>
           <div style={{ color: '#848E9C' }}>{language === 'zh' ? '多周期' : 'TF'}</div>
+          <div className="text-[10px] mt-0.5" style={{ color: '#a855f7' }}>
+            /30
+          </div>
         </div>
       </div>
 
+      {/* EMA sub-scores */}
+      {(score.ema_position !== undefined || score.ema_slope !== undefined || score.ema_alignment !== undefined) && (
+        <div className="mb-2 p-2 rounded text-xs" style={{ background: 'rgba(14, 203, 129, 0.05)' }}>
+          <div className="flex items-center gap-2 mb-1">
+            <span style={{ color: '#0ECB81' }}>📈 EMA详情</span>
+          </div>
+          <div className="grid grid-cols-3 gap-2">
+            <div className="text-center">
+              <div className="font-mono" style={{ color: '#EAECEF' }}>{score.ema_position ?? 0}<span className="text-[10px]" style={{ color: '#848E9C' }}>/8</span></div>
+              <div style={{ color: '#848E9C' }}>{language === 'zh' ? '位置' : 'Position'}</div>
+            </div>
+            <div className="text-center">
+              <div className="font-mono" style={{ color: '#EAECEF' }}>{score.ema_slope ?? 0}<span className="text-[10px]" style={{ color: '#848E9C' }}>/8</span></div>
+              <div style={{ color: '#848E9C' }}>{language === 'zh' ? '斜率' : 'Slope'}</div>
+            </div>
+            <div className="text-center">
+              <div className="font-mono" style={{ color: '#EAECEF' }}>{score.ema_alignment ?? 0}<span className="text-[10px]" style={{ color: '#848E9C' }}>/7</span></div>
+              <div style={{ color: '#848E9C' }}>{language === 'zh' ? '排列' : 'Align'}</div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Volume-Price sub-scores */}
+      {(score.oi_change !== undefined || score.volume_confirm !== undefined) && (
+        <div className="mb-2 p-2 rounded text-xs" style={{ background: 'rgba(240, 185, 11, 0.05)' }}>
+          <div className="flex items-center gap-2 mb-1">
+            <span style={{ color: '#F0B90B' }}>📊 {language === 'zh' ? '量价详情' : 'Vol-Price'}</span>
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            <div className="text-center">
+              <div className="font-mono" style={{ color: '#EAECEF' }}>{score.oi_change ?? 0}<span className="text-[10px]" style={{ color: '#848E9C' }}>/12</span></div>
+              <div style={{ color: '#848E9C' }}>OI{language === 'zh' ? '变化' : 'Change'}</div>
+              {score.oi_change_pct !== undefined && (
+                <div className="text-[10px]" style={{ color: score.oi_change_pct > 0 ? '#0ECB81' : '#F6465D' }}>
+                  {score.oi_change_pct > 0 ? '+' : ''}{score.oi_change_pct.toFixed(1)}%
+                </div>
+              )}
+            </div>
+            <div className="text-center">
+              <div className="font-mono" style={{ color: '#EAECEF' }}>{score.volume_confirm ?? 0}<span className="text-[10px]" style={{ color: '#848E9C' }}>/8</span></div>
+              <div style={{ color: '#848E9C' }}>{language === 'zh' ? '成交量' : 'Volume'}</div>
+              {score.volume_ratio !== undefined && (
+                <div className="text-[10px]" style={{ color: score.volume_ratio > 1 ? '#0ECB81' : '#848E9C' }}>
+                  {score.volume_ratio.toFixed(2)}x
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Multi-TF sub-scores */}
+      {(score.trend_consist !== undefined || score.key_position !== undefined) && (
+        <div className="mb-2 p-2 rounded text-xs" style={{ background: 'rgba(168, 85, 247, 0.05)' }}>
+          <div className="flex items-center gap-2 mb-1">
+            <span style={{ color: '#a855f7' }}>🔄 {language === 'zh' ? '多周期详情' : 'Multi-TF'}</span>
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            <div className="text-center">
+              <div className="font-mono" style={{ color: '#EAECEF' }}>{score.trend_consist ?? 0}<span className="text-[10px]" style={{ color: '#848E9C' }}>/20</span></div>
+              <div style={{ color: '#848E9C' }}>{language === 'zh' ? '趋势一致' : 'Trend'}</div>
+              {score.trend_tf_count !== undefined && score.trend_direction && (
+                <div className="text-[10px]" style={{ color: score.trend_direction === 'up' ? '#0ECB81' : score.trend_direction === 'down' ? '#F6465D' : '#848E9C' }}>
+                  {score.trend_tf_count} TF {score.trend_direction === 'up' ? '↑' : score.trend_direction === 'down' ? '↓' : '→'}
+                </div>
+              )}
+            </div>
+            <div className="text-center">
+              <div className="font-mono" style={{ color: '#EAECEF' }}>{score.key_position ?? 0}<span className="text-[10px]" style={{ color: '#848E9C' }}>/10</span></div>
+              <div style={{ color: '#848E9C' }}>{language === 'zh' ? '关键位置' : 'Key Pos'}</div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Score bar */}
-      <div className="mt-2 h-1.5 rounded-full" style={{ background: '#2B3139' }}>
+      <div className="mt-2 h-2 rounded-full" style={{ background: '#2B3139' }}>
         <div
           className="h-full rounded-full transition-all duration-300"
           style={{

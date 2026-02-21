@@ -34,10 +34,24 @@ type SignalScorer struct{}
 type SignalScore struct {
 	Total            int    `json:"total"`             // 总分 (0-100)
 	RSIScore         int    `json:"rsi_score"`         // RSI得分 (0-25)
-	EMAScore         int    `json:"ema_score"`         // EMA趋势得分 (0-25)
+	EMAScore         int    `json:"ema_score"`         // EMA趋势得分 (0-23)
 	VolumePriceScore int    `json:"volume_price_score"` // 量价配合得分 (0-20)
 	MultiTFScore     int    `json:"multi_tf_score"`    // 多周期共振得分 (0-30)
 	Details          string `json:"details"`           // 评分详情
+
+	// 详细子分数
+	RSIValue       float64 `json:"rsi_value,omitempty"`        // 当前RSI值
+	EMAPosition    int     `json:"ema_position,omitempty"`     // EMA位置得分 (0-8)
+	EMASlope       int     `json:"ema_slope,omitempty"`        // EMA斜率得分 (0-8)
+	EMAAlignment   int     `json:"ema_alignment,omitempty"`    // EMA排列得分 (0-7)
+	OIChange       int     `json:"oi_change,omitempty"`        // OI变化得分 (0-12)
+	VolumeConfirm  int     `json:"volume_confirm,omitempty"`   // 成交量确认得分 (0-8)
+	TrendConsist   int     `json:"trend_consist,omitempty"`    // 趋势一致性得分 (0-20)
+	KeyPosition    int     `json:"key_position,omitempty"`     // 关键位置得分 (0-10)
+	OIChangePct    float64 `json:"oi_change_pct,omitempty"`    // OI变化百分比
+	VolumeRatio    float64 `json:"volume_ratio,omitempty"`     // 成交量比率
+	TrendDirection string  `json:"trend_direction,omitempty"`  // 趋势方向
+	TrendTFCount   int     `json:"trend_tf_count,omitempty"`   // 同向趋势时间框架数
 }
 
 // NewSignalScorer 创建信号评分器
@@ -63,17 +77,34 @@ func (s *SignalScorer) Score(
 	isLong := strings.Contains(strings.ToUpper(decision.Action), "LONG") ||
 		decision.Action == "open_long" || decision.Action == "add_position"
 
+	// 保存RSI值
+	score.RSIValue = marketData.CurrentRSI7
+
 	// 1. RSI位置评分 (25分)
 	score.RSIScore = s.scoreRSI(marketData.CurrentRSI7, isLong)
 
-	// 2. EMA趋势评分 (25分) - 位置8分 + 斜率8分 + 排列9分
-	score.EMAScore = s.scoreEMATrend(marketData, isLong)
+	// 2. EMA趋势评分 (23分) - 位置8分 + 斜率8分 + 排列7分
+	emaResult := s.scoreEMATrendDetailed(marketData, isLong)
+	score.EMAScore = emaResult.total
+	score.EMAPosition = emaResult.position
+	score.EMASlope = emaResult.slope
+	score.EMAAlignment = emaResult.alignment
 
 	// 3. 量价配合评分 (20分) - OI变化12分 + 成交量确认8分
-	score.VolumePriceScore = s.scoreVolumePrice(marketData, isLong)
+	vpResult := s.scoreVolumePriceDetailed(marketData, isLong)
+	score.VolumePriceScore = vpResult.total
+	score.OIChange = vpResult.oiChange
+	score.VolumeConfirm = vpResult.volumeConfirm
+	score.OIChangePct = vpResult.oiChangePct
+	score.VolumeRatio = vpResult.volumeRatio
 
 	// 4. 多周期共振评分 (30分) - 趋势一致性20分 + 关键位置10分
-	score.MultiTFScore = s.scoreMultiTimeframe(multiTFData, isLong)
+	mtfResult := s.scoreMultiTimeframeDetailed(multiTFData, isLong)
+	score.MultiTFScore = mtfResult.total
+	score.TrendConsist = mtfResult.trendConsist
+	score.KeyPosition = mtfResult.keyPosition
+	score.TrendDirection = mtfResult.trendDirection
+	score.TrendTFCount = mtfResult.tfCount
 
 	// 计算总分
 	score.Total = score.RSIScore + score.EMAScore + score.VolumePriceScore + score.MultiTFScore
@@ -82,6 +113,32 @@ func (s *SignalScorer) Score(
 	score.Details = s.generateDetails(score, marketData.CurrentRSI7, isLong)
 
 	return score
+}
+
+// EMAScoreResult EMA评分详细结果
+type EMAScoreResult struct {
+	total     int
+	position  int
+	slope     int
+	alignment int
+}
+
+// VolumePriceResult 量价评分详细结果
+type VolumePriceResult struct {
+	total        int
+	oiChange     int
+	volumeConfirm int
+	oiChangePct  float64
+	volumeRatio  float64
+}
+
+// MultiTFResult 多周期评分详细结果
+type MultiTFResult struct {
+	total         int
+	trendConsist  int
+	keyPosition   int
+	trendDirection string
+	tfCount       int
 }
 
 // ============================================================================
@@ -626,6 +683,385 @@ func (s *SignalScorer) generateDetails(score *SignalScore, rsi float64, isLong b
 	}
 
 	return details.String()
+}
+
+// ============================================================================
+// 详细评分函数 - 返回子分数
+// ============================================================================
+
+// scoreEMATrendDetailed EMA趋势详细评分
+func (s *SignalScorer) scoreEMATrendDetailed(data *market.Data, isLong bool) EMAScoreResult {
+	result := EMAScoreResult{}
+
+	if data == nil || data.CurrentEMA20 == 0 {
+		return result
+	}
+
+	price := data.CurrentPrice
+	ema20 := data.CurrentEMA20
+
+	// A. 价格位置评分 (8分)
+	if isLong {
+		if price > ema20 {
+			deviationPct := (price - ema20) / ema20 * 100
+			switch {
+			case deviationPct < 1:
+				result.position = 8
+			case deviationPct < 2:
+				result.position = 6
+			case deviationPct < 4:
+				result.position = 4
+			case deviationPct < 6:
+				result.position = 2
+			}
+		}
+	} else {
+		if price < ema20 {
+			deviationPct := (ema20 - price) / ema20 * 100
+			switch {
+			case deviationPct < 1:
+				result.position = 8
+			case deviationPct < 2:
+				result.position = 6
+			case deviationPct < 4:
+				result.position = 4
+			case deviationPct < 6:
+				result.position = 2
+			}
+		}
+	}
+
+	// B. EMA斜率评分 (8分)
+	if data.TimeframeData != nil {
+		if primaryTF, ok := data.TimeframeData["5m"]; ok && len(primaryTF.EMA20Values) >= 3 {
+			ema20Last := primaryTF.EMA20Values[len(primaryTF.EMA20Values)-1]
+			ema20Prev := primaryTF.EMA20Values[len(primaryTF.EMA20Values)-2]
+			ema20Prev2 := primaryTF.EMA20Values[len(primaryTF.EMA20Values)-3]
+
+			slope1 := (ema20Last - ema20Prev) / ema20Prev * 100
+			slope2 := (ema20Prev - ema20Prev2) / ema20Prev2 * 100
+			avgSlope := (slope1 + slope2) / 2
+
+			if isLong {
+				switch {
+				case avgSlope > 0.5:
+					result.slope = 8
+				case avgSlope > 0.2:
+					result.slope = 6
+				case avgSlope > 0:
+					result.slope = 4
+				case avgSlope > -0.1:
+					result.slope = 2
+				}
+			} else {
+				switch {
+				case avgSlope < -0.5:
+					result.slope = 8
+				case avgSlope < -0.2:
+					result.slope = 6
+				case avgSlope < 0:
+					result.slope = 4
+				case avgSlope < 0.1:
+					result.slope = 2
+				}
+			}
+		}
+	}
+
+	// C. EMA排列评分 (7分)
+	if data.TimeframeData != nil {
+		if primaryTF, ok := data.TimeframeData["5m"]; ok && len(primaryTF.EMA20Values) > 0 && len(primaryTF.EMA50Values) > 0 {
+			ema20Last := primaryTF.EMA20Values[len(primaryTF.EMA20Values)-1]
+			ema50Last := primaryTF.EMA50Values[len(primaryTF.EMA50Values)-1]
+			gap := (ema20Last - ema50Last) / ema50Last * 100
+
+			if isLong {
+				switch {
+				case gap > 0.5 && gap < 2:
+					result.alignment = 7
+				case gap > 0:
+					result.alignment = 5
+				case gap > -0.3:
+					result.alignment = 3
+				case gap > -1:
+					result.alignment = 1
+				}
+			} else {
+				switch {
+				case gap < -0.5 && gap > -2:
+					result.alignment = 7
+				case gap < 0:
+					result.alignment = 5
+				case gap < 0.3:
+					result.alignment = 3
+				case gap < 1:
+					result.alignment = 1
+				}
+			}
+		}
+	}
+
+	result.total = result.position + result.slope + result.alignment
+	return result
+}
+
+// scoreVolumePriceDetailed 量价配合详细评分
+func (s *SignalScorer) scoreVolumePriceDetailed(data *market.Data, isLong bool) VolumePriceResult {
+	result := VolumePriceResult{}
+
+	if data == nil {
+		return result
+	}
+
+	// A. OI变化评分 (12分)
+	if data.OpenInterest != nil && data.OpenInterest.Average > 0 {
+		priceChange := data.PriceChange1h
+		result.oiChangePct = (data.OpenInterest.Latest - data.OpenInterest.Average) / data.OpenInterest.Average * 100
+
+		if isLong {
+			switch {
+			case result.oiChangePct > 3 && priceChange > 1:
+				result.oiChange = 12
+			case result.oiChangePct > 1 && priceChange > 0.5:
+				result.oiChange = 9
+			case result.oiChangePct > 0 && priceChange > 0:
+				result.oiChange = 6
+			case result.oiChangePct > 0 && priceChange > -0.5:
+				result.oiChange = 4
+			case priceChange > 1:
+				result.oiChange = 2
+			}
+		} else {
+			switch {
+			case result.oiChangePct > 3 && priceChange < -1:
+				result.oiChange = 12
+			case result.oiChangePct > 1 && priceChange < -0.5:
+				result.oiChange = 9
+			case result.oiChangePct > 0 && priceChange < 0:
+				result.oiChange = 6
+			case result.oiChangePct > 0 && priceChange < 0.5:
+				result.oiChange = 4
+			case priceChange < -1:
+				result.oiChange = 2
+			}
+		}
+	}
+
+	// B. 成交量确认评分 (8分)
+	if data.TimeframeData != nil {
+		if primaryTF, ok := data.TimeframeData["5m"]; ok && len(primaryTF.Klines) >= 24 {
+			klines := primaryTF.Klines
+			var totalVol float64
+			for i := len(klines) - 24; i < len(klines); i++ {
+				totalVol += klines[i].Volume
+			}
+			avgVol := totalVol / 24
+			latestVol := klines[len(klines)-1].Volume
+
+			if avgVol > 0 {
+				result.volumeRatio = latestVol / avgVol
+				switch {
+				case result.volumeRatio > 2.0:
+					result.volumeConfirm = 8
+				case result.volumeRatio > 1.5:
+					result.volumeConfirm = 6
+				case result.volumeRatio > 1.2:
+					result.volumeConfirm = 4
+				case result.volumeRatio > 0.8:
+					result.volumeConfirm = 2
+				}
+			}
+		} else if len(primaryTF.Volume) >= 24 {
+			volumes := primaryTF.Volume
+			var totalVol float64
+			for i := len(volumes) - 24; i < len(volumes); i++ {
+				totalVol += volumes[i]
+			}
+			avgVol := totalVol / 24
+			latestVol := volumes[len(volumes)-1]
+
+			if avgVol > 0 {
+				result.volumeRatio = latestVol / avgVol
+				switch {
+				case result.volumeRatio > 2.0:
+					result.volumeConfirm = 8
+				case result.volumeRatio > 1.5:
+					result.volumeConfirm = 6
+				case result.volumeRatio > 1.2:
+					result.volumeConfirm = 4
+				case result.volumeRatio > 0.8:
+					result.volumeConfirm = 2
+				}
+			}
+		}
+	}
+
+	result.total = result.oiChange + result.volumeConfirm
+	return result
+}
+
+// scoreMultiTimeframeDetailed 多周期共振详细评分
+func (s *SignalScorer) scoreMultiTimeframeDetailed(tfData map[string]*market.TimeframeSeriesData, isLong bool) MultiTFResult {
+	result := MultiTFResult{}
+
+	if tfData == nil || len(tfData) == 0 {
+		return result
+	}
+
+	// A. 趋势一致性评分 (20分)
+	trends := make(map[string]string)
+	keyTimeframes := []string{"15m", "1h", "4h", "5m"}
+
+	for _, tf := range keyTimeframes {
+		data, ok := tfData[tf]
+		if !ok {
+			continue
+		}
+		if len(data.EMA20Values) < 2 || len(data.EMA50Values) < 2 {
+			continue
+		}
+
+		ema20Last := data.EMA20Values[len(data.EMA20Values)-1]
+		ema20Prev := data.EMA20Values[len(data.EMA20Values)-2]
+		ema50Last := data.EMA50Values[len(data.EMA50Values)-1]
+		emaSlope := (ema20Last - ema20Prev) / ema20Prev * 100
+
+		if ema20Last > ema50Last && emaSlope > 0.05 {
+			trends[tf] = "up"
+		} else if ema20Last < ema50Last && emaSlope < -0.05 {
+			trends[tf] = "down"
+		} else {
+			trends[tf] = "sideways"
+		}
+	}
+
+	upCount := 0
+	downCount := 0
+	sidewaysCount := 0
+	for _, trend := range trends {
+		switch trend {
+		case "up":
+			upCount++
+		case "down":
+			downCount++
+		default:
+			sidewaysCount++
+		}
+	}
+
+	totalTF := len(trends)
+	if totalTF == 0 {
+		return result
+	}
+
+	if isLong {
+		result.trendDirection = "up"
+		result.tfCount = upCount
+		switch {
+		case upCount == totalTF:
+			result.trendConsist = 20
+		case upCount == totalTF-1 && sidewaysCount == 1:
+			result.trendConsist = 16
+		case upCount >= totalTF/2+1:
+			result.trendConsist = 12
+		case upCount > 0 && downCount == 0:
+			result.trendConsist = 6
+		case upCount > 0:
+			result.trendConsist = 3
+		}
+	} else {
+		result.trendDirection = "down"
+		result.tfCount = downCount
+		switch {
+		case downCount == totalTF:
+			result.trendConsist = 20
+		case downCount == totalTF-1 && sidewaysCount == 1:
+			result.trendConsist = 16
+		case downCount >= totalTF/2+1:
+			result.trendConsist = 12
+		case downCount > 0 && upCount == 0:
+			result.trendConsist = 6
+		case downCount > 0:
+			result.trendConsist = 3
+		}
+	}
+
+	// B. 关键位置确认评分 (10分)
+	for _, tf := range []string{"1h", "4h"} {
+		data, ok := tfData[tf]
+		if !ok || len(data.Klines) < 2 {
+			continue
+		}
+
+		latestKline := data.Klines[len(data.Klines)-1]
+
+		if len(data.BOLLUpper) > 0 && len(data.BOLLLower) > 0 && len(data.BOLLMiddle) > 0 {
+			upper := data.BOLLUpper[len(data.BOLLUpper)-1]
+			lower := data.BOLLLower[len(data.BOLLLower)-1]
+			close := latestKline.Close
+
+			bandWidth := upper - lower
+			if bandWidth > 0 {
+				position := (close - lower) / bandWidth
+
+				if isLong {
+					if position < 0.3 {
+						result.keyPosition = 10
+					} else if position < 0.5 {
+						result.keyPosition = 6
+					} else if position < 0.7 {
+						result.keyPosition = 3
+					}
+				} else {
+					if position > 0.7 {
+						result.keyPosition = 10
+					} else if position > 0.5 {
+						result.keyPosition = 6
+					} else if position > 0.3 {
+						result.keyPosition = 3
+					}
+				}
+
+				if result.keyPosition > 0 {
+					break
+				}
+			}
+		}
+
+		// 检查EMA支撑/阻力
+		if len(data.EMA20Values) > 0 && len(data.EMA50Values) > 0 {
+			ema20 := data.EMA20Values[len(data.EMA20Values)-1]
+			ema50 := data.EMA50Values[len(data.EMA50Values)-1]
+			close := latestKline.Close
+
+			if isLong {
+				ema20Dist := (close - ema20) / ema20 * 100
+				ema50Dist := (close - ema50) / ema50 * 100
+
+				if ema20Dist < 0.5 && ema20Dist > -0.5 {
+					result.keyPosition = 8
+				} else if ema50Dist < 1 && ema50Dist > -1 {
+					result.keyPosition = 6
+				}
+			} else {
+				ema20Dist := (close - ema20) / ema20 * 100
+				ema50Dist := (close - ema50) / ema50 * 100
+
+				if ema20Dist < 0.5 && ema20Dist > -0.5 {
+					result.keyPosition = 8
+				} else if ema50Dist < 1 && ema50Dist > -1 && close < ema50 {
+					result.keyPosition = 6
+				}
+			}
+
+			if result.keyPosition > 0 {
+				break
+			}
+		}
+	}
+
+	result.total = result.trendConsist + result.keyPosition
+	return result
 }
 
 // ValidateSignalScore 验证信号分数是否达到阈值
