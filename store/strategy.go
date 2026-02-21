@@ -224,6 +224,77 @@ type RiskControlConfig struct {
 	MinRiskRewardRatio float64 `json:"min_risk_reward_ratio"`
 	// Min AI confidence to open position (AI guided)
 	MinConfidence int `json:"min_confidence"`
+
+	// Trading discipline configuration (CODE ENFORCED)
+	TradingDiscipline TradingDisciplineConfig `json:"trading_discipline"`
+
+	// Conservative strategy configuration (CODE ENFORCED)
+	ConservativeStrategy ConservativeStrategyConfig `json:"conservative_strategy"`
+}
+
+// TradingDisciplineConfig trading discipline configuration (CODE ENFORCED)
+type TradingDisciplineConfig struct {
+	// === Minimum Holding Time ===
+	// Enable minimum holding time check
+	EnableMinHoldingTime bool `json:"enable_min_holding_time"`
+	// Minimum holding time in minutes (default: 30)
+	MinHoldingMinutes int `json:"min_holding_minutes"`
+
+	// === Entry Indicator Validation (Prevent Chasing) ===
+	// Enable indicator-based entry validation
+	EnableEntryIndicators bool `json:"enable_entry_indicators"`
+	// Max RSI for long entry - prevent buying at overbought (default: 70)
+	MaxRSIForLong int `json:"max_rsi_for_long"`
+	// Min RSI for short entry - prevent selling at oversold (default: 30)
+	MinRSIForShort int `json:"min_rsi_for_short"`
+	// Max price deviation from EMA20 in percent (default: 5%)
+	MaxPriceDeviationPct float64 `json:"max_price_deviation_pct"`
+
+	// === Mandatory Stop-Loss/Take-Profit ===
+	// Require stop-loss for all positions
+	RequireStopLoss bool `json:"require_stop_loss"`
+	// Require take-profit for all positions
+	RequireTakeProfit bool `json:"require_take_profit"`
+
+	// === Close Position Restrictions ===
+	// Enable close position restrictions
+	EnableCloseRestrictions bool `json:"enable_close_restrictions"`
+	// Min loss % to allow early close (negative, e.g., -3.0 means allow close if loss >= 3%)
+	MinLossPctForEarlyClose float64 `json:"min_loss_pct_for_early_close"`
+	// Min characters for close reasoning (enforce detailed explanation)
+	CloseReasoningMinLength int `json:"close_reasoning_min_length"`
+}
+
+// ConservativeStrategyConfig conservative strategy configuration (CODE ENFORCED)
+// Focus on fewer but higher quality trades, following trends
+type ConservativeStrategyConfig struct {
+	// === Daily Limits ===
+	// Enable daily trading limits
+	EnableDailyLimits bool `json:"enable_daily_limits"`
+	// Maximum number of trades per day (default: 3)
+	MaxDailyTrades int `json:"max_daily_trades"`
+	// Maximum daily loss percentage (negative, e.g., -5.0 means stop if loss >= 5%)
+	MaxDailyLossPct float64 `json:"max_daily_loss_pct"`
+
+	// === Signal Quality Scoring ===
+	// Enable signal quality scoring
+	EnableSignalScoring bool `json:"enable_signal_scoring"`
+	// Minimum signal score to accept trade (0-100, default: 60)
+	MinSignalScore int `json:"min_signal_score"`
+
+	// === Trend Confirmation ===
+	// Enable trend confirmation
+	EnableTrendConfirm bool `json:"enable_trend_confirm"`
+	// Require multi-timeframe trend confirmation (15M + 1H must align)
+	RequireMultiTimeframe bool `json:"require_multi_timeframe"`
+
+	// === Trailing Stop ===
+	// Enable trailing stop-loss
+	EnableTrailingStop bool `json:"enable_trailing_stop"`
+	// Profit percentage to trigger trailing stop (default: 2%)
+	TrailAfterProfitPct float64 `json:"trail_after_profit_pct"`
+	// Profit percentage to move stop-loss to breakeven (default: 5%)
+	TrailToBreakevenAt float64 `json:"trail_to_breakeven_at"`
 }
 
 // NewStrategyStore creates a new StrategyStore
@@ -311,6 +382,31 @@ func GetDefaultStrategyConfig(lang string) StrategyConfig {
 			MinPositionSize:                 12,  // Min 12 USDT per position (CODE ENFORCED)
 			MinRiskRewardRatio:              3.0, // Min 3:1 profit/loss ratio (AI guided)
 			MinConfidence:                   75,  // Min 75% confidence (AI guided)
+			TradingDiscipline: TradingDisciplineConfig{
+				EnableMinHoldingTime:     false, // Disabled by default for backward compatibility
+				MinHoldingMinutes:        30,    // Default: 30 minutes
+				EnableEntryIndicators:    false, // Disabled by default
+				MaxRSIForLong:            70,    // RSI > 70 = overbought, reject long
+				MinRSIForShort:           30,    // RSI < 30 = oversold, reject short
+				MaxPriceDeviationPct:     5.0,   // Max 5% deviation from EMA20
+				RequireStopLoss:          true,  // Stop-loss required for new positions
+				RequireTakeProfit:        true,  // Take-profit required for new positions
+				EnableCloseRestrictions:  false, // Disabled by default
+				MinLossPctForEarlyClose:  -3.0,  // Allow early close if loss >= 3%
+				CloseReasoningMinLength:  50,    // Min 50 chars for close reasoning
+			},
+			ConservativeStrategy: ConservativeStrategyConfig{
+				EnableDailyLimits:     false, // Disabled by default
+				MaxDailyTrades:        3,     // Max 3 trades per day
+				MaxDailyLossPct:       -5.0,  // Stop if daily loss >= 5%
+				EnableSignalScoring:   false, // Disabled by default
+				MinSignalScore:        60,    // Min 60/100 score required
+				EnableTrendConfirm:    false, // Disabled by default
+				RequireMultiTimeframe: true,  // Require 15M + 1H alignment
+				EnableTrailingStop:    false, // Disabled by default
+				TrailAfterProfitPct:   2.0,   // Start trailing at 2% profit
+				TrailToBreakevenAt:    5.0,   // Move to breakeven at 5% profit
+			},
 		},
 	}
 

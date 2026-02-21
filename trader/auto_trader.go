@@ -721,6 +721,46 @@ func (at *AutoTrader) runCycle() error {
 			Success:    false,
 		}
 
+		// Copy validation result from kernel decision to action record
+		if d.ValidationResult != nil {
+			actionRecord.ValidationResult = &store.DecisionValidationResult{
+				Passed:          d.ValidationResult.Passed,
+				ValidationError: d.ValidationResult.ValidationError,
+			}
+			if d.ValidationResult.SignalScore != nil {
+				actionRecord.ValidationResult.SignalScore = &store.SignalScore{
+					Total:            d.ValidationResult.SignalScore.Total,
+					RSIScore:         d.ValidationResult.SignalScore.RSIScore,
+					EMAScore:         d.ValidationResult.SignalScore.EMAScore,
+					VolumePriceScore: d.ValidationResult.SignalScore.VolumePriceScore,
+					MultiTFScore:     d.ValidationResult.SignalScore.MultiTFScore,
+					Details:          d.ValidationResult.SignalScore.Details,
+				}
+			}
+			if d.ValidationResult.TrendAnalysis != nil {
+				actionRecord.ValidationResult.TrendAnalysis = &store.TrendAnalysis{
+					Direction:     d.ValidationResult.TrendAnalysis.Direction.String(),
+					Strength:      d.ValidationResult.TrendAnalysis.Strength,
+					PrimaryTF:     d.ValidationResult.TrendAnalysis.PrimaryTF,
+					ConfirmTF:     d.ValidationResult.TrendAnalysis.ConfirmTF,
+					IsConfirmed:   d.ValidationResult.TrendAnalysis.IsConfirmed,
+					EMAAlignment:  d.ValidationResult.TrendAnalysis.EMAAlignment,
+					PricePosition: d.ValidationResult.TrendAnalysis.PricePosition,
+					Details:       d.ValidationResult.TrendAnalysis.Details,
+				}
+			}
+		}
+
+		// Check validation result - skip execution if validation failed
+		if d.ValidationResult != nil && !d.ValidationResult.Passed {
+			logger.Infof("⏭️  Skipping %s %s - validation failed: %s", d.Symbol, d.Action, d.ValidationResult.ValidationError)
+			actionRecord.Error = d.ValidationResult.ValidationError
+			actionRecord.Success = false
+			record.ExecutionLog = append(record.ExecutionLog, fmt.Sprintf("⏭️  %s %s skipped (validation failed): %s", d.Symbol, d.Action, d.ValidationResult.ValidationError))
+			record.Decisions = append(record.Decisions, actionRecord)
+			continue
+		}
+
 		if err := at.executeDecisionWithRecord(&d, &actionRecord); err != nil {
 			logger.Infof("❌ Failed to execute decision (%s %s): %v", d.Symbol, d.Action, err)
 			actionRecord.Error = err.Error()
@@ -1111,6 +1151,44 @@ func (at *AutoTrader) executeOpenLongWithRecord(decision *kernel.Decision, actio
 		return err
 	}
 
+	// === Trading Discipline: Entry Indicator Validation (Prevent Chasing) ===
+	strategyConfig := at.strategyEngine.GetConfig()
+	discipline := strategyConfig.RiskControl.TradingDiscipline
+	if discipline.EnableEntryIndicators {
+		// RSI Validation for Long
+		currentRSI := marketData.CurrentRSI7
+		if currentRSI <= 0 && marketData.TimeframeData != nil {
+			// Fallback: try to get RSI from timeframe data
+			if tf5m, ok := marketData.TimeframeData["5m"]; ok && len(tf5m.RSI14Values) > 0 {
+				currentRSI = tf5m.RSI14Values[len(tf5m.RSI14Values)-1]
+			}
+		}
+		if currentRSI > 0 && currentRSI > float64(discipline.MaxRSIForLong) {
+			logger.Infof("  ⛔ [Trading Discipline] Rejecting long: RSI %.1f > %d (overbought)",
+				currentRSI, discipline.MaxRSIForLong)
+			return fmt.Errorf("trading discipline: RSI %.1f exceeds max %d for long entry (overbought), rejecting to prevent chasing highs",
+				currentRSI, discipline.MaxRSIForLong)
+		}
+
+		// Price Deviation from EMA Validation
+		currentEMA := marketData.CurrentEMA20
+		if currentEMA <= 0 && marketData.TimeframeData != nil {
+			// Fallback: try to get EMA from timeframe data
+			if tf5m, ok := marketData.TimeframeData["5m"]; ok && len(tf5m.EMA20Values) > 0 {
+				currentEMA = tf5m.EMA20Values[len(tf5m.EMA20Values)-1]
+			}
+		}
+		if currentEMA > 0 {
+			priceDeviationPct := (marketData.CurrentPrice - currentEMA) / currentEMA * 100
+			if priceDeviationPct > discipline.MaxPriceDeviationPct {
+				logger.Infof("  ⛔ [Trading Discipline] Rejecting long: price %.2f deviates %.1f%% above EMA20 %.2f (max %.1f%%)",
+					marketData.CurrentPrice, priceDeviationPct, currentEMA, discipline.MaxPriceDeviationPct)
+				return fmt.Errorf("trading discipline: price %.2f deviates %.1f%% above EMA20 %.2f (max %.1f%%), rejecting to prevent chasing highs",
+					marketData.CurrentPrice, priceDeviationPct, currentEMA, discipline.MaxPriceDeviationPct)
+			}
+		}
+	}
+
 	// Get balance (needed for multiple checks)
 	balance, err := at.trader.GetBalance()
 	if err != nil {
@@ -1228,6 +1306,44 @@ func (at *AutoTrader) executeOpenShortWithRecord(decision *kernel.Decision, acti
 		return err
 	}
 
+	// === Trading Discipline: Entry Indicator Validation (Prevent Chasing) ===
+	strategyConfig := at.strategyEngine.GetConfig()
+	discipline := strategyConfig.RiskControl.TradingDiscipline
+	if discipline.EnableEntryIndicators {
+		// RSI Validation for Short
+		currentRSI := marketData.CurrentRSI7
+		if currentRSI <= 0 && marketData.TimeframeData != nil {
+			// Fallback: try to get RSI from timeframe data
+			if tf5m, ok := marketData.TimeframeData["5m"]; ok && len(tf5m.RSI14Values) > 0 {
+				currentRSI = tf5m.RSI14Values[len(tf5m.RSI14Values)-1]
+			}
+		}
+		if currentRSI > 0 && currentRSI < float64(discipline.MinRSIForShort) {
+			logger.Infof("  ⛔ [Trading Discipline] Rejecting short: RSI %.1f < %d (oversold)",
+				currentRSI, discipline.MinRSIForShort)
+			return fmt.Errorf("trading discipline: RSI %.1f below min %d for short entry (oversold), rejecting to prevent chasing lows",
+				currentRSI, discipline.MinRSIForShort)
+		}
+
+		// Price Deviation from EMA Validation
+		currentEMA := marketData.CurrentEMA20
+		if currentEMA <= 0 && marketData.TimeframeData != nil {
+			// Fallback: try to get EMA from timeframe data
+			if tf5m, ok := marketData.TimeframeData["5m"]; ok && len(tf5m.EMA20Values) > 0 {
+				currentEMA = tf5m.EMA20Values[len(tf5m.EMA20Values)-1]
+			}
+		}
+		if currentEMA > 0 {
+			priceDeviationPct := (currentEMA - marketData.CurrentPrice) / currentEMA * 100
+			if priceDeviationPct > discipline.MaxPriceDeviationPct {
+				logger.Infof("  ⛔ [Trading Discipline] Rejecting short: price %.2f deviates %.1f%% below EMA20 %.2f (max %.1f%%)",
+					marketData.CurrentPrice, priceDeviationPct, currentEMA, discipline.MaxPriceDeviationPct)
+				return fmt.Errorf("trading discipline: price %.2f deviates %.1f%% below EMA20 %.2f (max %.1f%%), rejecting to prevent chasing lows",
+					marketData.CurrentPrice, priceDeviationPct, currentEMA, discipline.MaxPriceDeviationPct)
+			}
+		}
+	}
+
 	// Get balance (needed for multiple checks)
 	balance, err := at.trader.GetBalance()
 	if err != nil {
@@ -1331,6 +1447,28 @@ func (at *AutoTrader) executeCloseLongWithRecord(decision *kernel.Decision, acti
 	// Normalize symbol for database lookup
 	normalizedSymbol := market.Normalize(decision.Symbol)
 
+	// === Trading Discipline: Minimum Holding Time Check ===
+	strategyConfig := at.strategyEngine.GetConfig()
+	discipline := strategyConfig.RiskControl.TradingDiscipline
+	if discipline.EnableMinHoldingTime && at.store != nil {
+		if openPos, err := at.store.Position().GetOpenPositionBySymbol(at.id, normalizedSymbol, "LONG"); err == nil && openPos != nil {
+			holdingMs := time.Now().UnixMilli() - openPos.EntryTime
+			holdingMinutes := holdingMs / (1000 * 60)
+			if holdingMinutes < int64(discipline.MinHoldingMinutes) {
+				// Calculate current PnL to check if we should allow early close due to loss
+				currentPnLPct := (marketData.CurrentPrice - openPos.EntryPrice) / openPos.EntryPrice * 100 * float64(openPos.Leverage)
+				if currentPnLPct > discipline.MinLossPctForEarlyClose {
+					logger.Infof("  ⛔ [Trading Discipline] Rejecting close: held %d min < %d min required, PnL %.2f%% > %.2f%% threshold",
+						holdingMinutes, discipline.MinHoldingMinutes, currentPnLPct, discipline.MinLossPctForEarlyClose)
+					return fmt.Errorf("trading discipline: position held only %d minutes (< %d min required), current PnL %.2f%% exceeds early close threshold %.2f%%",
+						holdingMinutes, discipline.MinHoldingMinutes, currentPnLPct, discipline.MinLossPctForEarlyClose)
+				}
+				logger.Infof("  ⚠️ [Trading Discipline] Allowing early close: held %d min < %d min, but PnL %.2f%% <= %.2f%% threshold (loss)",
+					holdingMinutes, discipline.MinHoldingMinutes, currentPnLPct, discipline.MinLossPctForEarlyClose)
+			}
+		}
+	}
+
 	// Get entry price and quantity - prioritize local database for accurate quantity
 	var entryPrice float64
 	var quantity float64
@@ -1394,6 +1532,28 @@ func (at *AutoTrader) executeCloseShortWithRecord(decision *kernel.Decision, act
 
 	// Normalize symbol for database lookup
 	normalizedSymbol := market.Normalize(decision.Symbol)
+
+	// === Trading Discipline: Minimum Holding Time Check ===
+	strategyConfig := at.strategyEngine.GetConfig()
+	discipline := strategyConfig.RiskControl.TradingDiscipline
+	if discipline.EnableMinHoldingTime && at.store != nil {
+		if openPos, err := at.store.Position().GetOpenPositionBySymbol(at.id, normalizedSymbol, "SHORT"); err == nil && openPos != nil {
+			holdingMs := time.Now().UnixMilli() - openPos.EntryTime
+			holdingMinutes := holdingMs / (1000 * 60)
+			if holdingMinutes < int64(discipline.MinHoldingMinutes) {
+				// Calculate current PnL for short position (price down = profit)
+				currentPnLPct := (openPos.EntryPrice - marketData.CurrentPrice) / openPos.EntryPrice * 100 * float64(openPos.Leverage)
+				if currentPnLPct > discipline.MinLossPctForEarlyClose {
+					logger.Infof("  ⛔ [Trading Discipline] Rejecting close: held %d min < %d min required, PnL %.2f%% > %.2f%% threshold",
+						holdingMinutes, discipline.MinHoldingMinutes, currentPnLPct, discipline.MinLossPctForEarlyClose)
+					return fmt.Errorf("trading discipline: position held only %d minutes (< %d min required), current PnL %.2f%% exceeds early close threshold %.2f%%",
+						holdingMinutes, discipline.MinHoldingMinutes, currentPnLPct, discipline.MinLossPctForEarlyClose)
+				}
+				logger.Infof("  ⚠️ [Trading Discipline] Allowing early close: held %d min < %d min, but PnL %.2f%% <= %.2f%% threshold (loss)",
+					holdingMinutes, discipline.MinHoldingMinutes, currentPnLPct, discipline.MinLossPctForEarlyClose)
+			}
+		}
+	}
 
 	// Get entry price and quantity - prioritize local database for accurate quantity
 	var entryPrice float64

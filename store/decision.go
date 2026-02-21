@@ -78,21 +78,52 @@ type PositionSnapshot struct {
 	LiquidationPrice float64 `json:"liquidation_price"`
 }
 
+// SignalScore signal quality score breakdown
+type SignalScore struct {
+	Total             int    `json:"total"`              // Total score (0-100)
+	RSIScore          int    `json:"rsi_score"`          // RSI score (0-25)
+	EMAScore          int    `json:"ema_score"`          // EMA trend score (0-25)
+	VolumePriceScore  int    `json:"volume_price_score"` // Volume-price alignment score (0-20)
+	MultiTFScore      int    `json:"multi_tf_score"`     // Multi-timeframe resonance score (0-30)
+	Details           string `json:"details,omitempty"`  // Score details
+}
+
+// TrendAnalysis trend analysis result
+type TrendAnalysis struct {
+	Direction     string `json:"direction"`      // Trend direction: 'up', 'down', 'sideways'
+	Strength      int    `json:"strength"`       // Trend strength (0-100)
+	PrimaryTF     string `json:"primary_tf"`     // Primary timeframe
+	ConfirmTF     string `json:"confirm_tf"`     // Confirmation timeframe
+	IsConfirmed   bool   `json:"is_confirmed"`   // Multi-timeframe confirmed
+	EMAAlignment  string `json:"ema_alignment"`  // EMA alignment state
+	PricePosition string `json:"price_position"` // Price position relative to EMA
+	Details       string `json:"details,omitempty"`
+}
+
+// DecisionValidationResult validation result for a decision
+type DecisionValidationResult struct {
+	Passed          bool           `json:"passed"`
+	SignalScore     *SignalScore   `json:"signal_score,omitempty"`
+	TrendAnalysis   *TrendAnalysis `json:"trend_analysis,omitempty"`
+	ValidationError string         `json:"validation_error,omitempty"`
+}
+
 // DecisionAction decision action
 type DecisionAction struct {
-	Action     string    `json:"action"`
-	Symbol     string    `json:"symbol"`
-	Quantity   float64   `json:"quantity"`
-	Leverage   int       `json:"leverage"`
-	Price      float64   `json:"price"`
-	StopLoss   float64   `json:"stop_loss,omitempty"`   // Stop loss price
-	TakeProfit float64   `json:"take_profit,omitempty"` // Take profit price
-	Confidence int       `json:"confidence,omitempty"`  // AI confidence (0-100)
-	Reasoning  string    `json:"reasoning,omitempty"`   // Brief reasoning
-	OrderID    int64     `json:"order_id"`
-	Timestamp  time.Time `json:"timestamp"`
-	Success    bool      `json:"success"`
-	Error      string    `json:"error"`
+	Action           string                    `json:"action"`
+	Symbol           string                    `json:"symbol"`
+	Quantity         float64                   `json:"quantity"`
+	Leverage         int                       `json:"leverage"`
+	Price            float64                   `json:"price"`
+	StopLoss         float64                   `json:"stop_loss,omitempty"`   // Stop loss price
+	TakeProfit       float64                   `json:"take_profit,omitempty"` // Take profit price
+	Confidence       int                       `json:"confidence,omitempty"`  // AI confidence (0-100)
+	Reasoning        string                    `json:"reasoning,omitempty"`   // Brief reasoning
+	OrderID          int64                     `json:"order_id"`
+	Timestamp        time.Time                 `json:"timestamp"`
+	Success          bool                      `json:"success"`
+	Error            string                    `json:"error"`
+	ValidationResult *DecisionValidationResult `json:"validation_result,omitempty"` // Validation result from backend
 }
 
 // Statistics statistics information

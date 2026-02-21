@@ -155,9 +155,15 @@ func (t *FuturesTrader) SyncOrdersFromBinance(traderID string, exchangeID string
 
 	if len(allTrades) == 0 {
 		// No trades returned, but symbols were detected - might be false positive from COMMISSION/PnL detection
-		// Don't update lastSyncTime, keep using DB value
-		if len(failedSymbols) > 0 {
-			logger.Infof("  ⚠️ %d symbols failed: %v", len(failedSymbols), failedSymbols)
+		// Update lastSyncTime to avoid re-querying the same symbols repeatedly
+		if len(failedSymbols) == 0 {
+			binanceSyncStateMutex.Lock()
+			binanceSyncState[exchangeID] = nowMs - 1000 // Set to 1 second ago to avoid edge cases
+			binanceSyncStateMutex.Unlock()
+			logger.Infof("📅 No new trades, updated lastSyncTime to avoid re-query: %s (UTC)",
+				time.UnixMilli(nowMs-1000).UTC().Format("2006-01-02 15:04:05"))
+		} else {
+			logger.Infof("  ⚠️ %d symbols failed, not updating lastSyncTime: %v", len(failedSymbols), failedSymbols)
 		}
 		return nil
 	}

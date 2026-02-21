@@ -6,8 +6,6 @@ import {
   Copy,
   Trash2,
   Check,
-  ChevronDown,
-  ChevronRight,
   Settings,
   BarChart3,
   Target,
@@ -21,26 +19,73 @@ import {
   FileText,
   Loader2,
   RefreshCw,
-  Clock,
   Bot,
   Terminal,
   Code,
-  Send,
   Download,
   Upload,
   Globe,
+  Send,
+  Clock,
 } from 'lucide-react'
 import type { Strategy, StrategyConfig, AIModel } from '../types'
 import { confirmToast, notify } from '../lib/notify'
 import { CoinSourceEditor } from '../components/strategy/CoinSourceEditor'
 import { IndicatorEditor } from '../components/strategy/IndicatorEditor'
-import { RiskControlEditor } from '../components/strategy/RiskControlEditor'
+import { RiskSettingsEditor } from '../components/strategy/RiskSettingsEditor'
 import { PromptSectionsEditor } from '../components/strategy/PromptSectionsEditor'
 import { PublishSettingsEditor } from '../components/strategy/PublishSettingsEditor'
 import { GridConfigEditor, defaultGridConfig } from '../components/strategy/GridConfigEditor'
 import { DeepVoidBackground } from '../components/DeepVoidBackground'
 
 const API_BASE = import.meta.env.VITE_API_BASE || ''
+
+// Default values for conservative strategy config
+const defaultConservativeStrategyConfig = {
+  enable_daily_limits: false,
+  max_daily_trades: 3,
+  max_daily_loss_pct: -5,
+  enable_signal_scoring: false,
+  min_signal_score: 60,
+  enable_trend_confirm: false,
+  require_multi_timeframe: true,
+  enable_trailing_stop: false,
+  trail_after_profit_pct: 2,
+  trail_to_breakeven_at: 5,
+}
+
+// Default values for trading discipline config
+const defaultTradingDisciplineConfig = {
+  enable_min_holding_time: false,
+  min_holding_minutes: 30,
+  enable_entry_indicators: false,
+  max_rsi_for_long: 70,
+  min_rsi_for_short: 30,
+  max_price_deviation_pct: 5,
+  require_stop_loss: true,
+  require_take_profit: true,
+  enable_close_restrictions: false,
+  min_loss_pct_for_early_close: -3,
+  close_reasoning_min_length: 50,
+}
+
+// Helper function to merge config with defaults
+function mergeWithDefaults(config: StrategyConfig): StrategyConfig {
+  return {
+    ...config,
+    risk_control: {
+      ...config.risk_control,
+      trading_discipline: {
+        ...defaultTradingDisciplineConfig,
+        ...config.risk_control?.trading_discipline,
+      },
+      conservative_strategy: {
+        ...defaultConservativeStrategyConfig,
+        ...config.risk_control?.conservative_strategy,
+      },
+    },
+  }
+}
 
 export function StrategyStudioPage() {
   const { token } = useAuth()
@@ -58,16 +103,20 @@ export function StrategyStudioPage() {
   const [aiModels, setAiModels] = useState<AIModel[]>([])
   const [selectedModelId, setSelectedModelId] = useState<string>('')
 
-  // Accordion states for left panel
-  const [expandedSections, setExpandedSections] = useState({
-    gridConfig: true,
-    coinSource: true,
-    indicators: false,
-    riskControl: false,
-    promptSections: false,
-    customPrompt: false,
-    publishSettings: false,
-  })
+  // Config tab state for center panel
+  type ConfigTab = 'coinSource' | 'indicators' | 'riskSettings' | 'prompt'
+  const [activeConfigTab, setActiveConfigTab] = useState<ConfigTab>('coinSource')
+
+  // Ensure activeConfigTab is valid when strategy type changes
+  useEffect(() => {
+    const currentStrategyType = editingConfig?.strategy_type || 'ai_trading'
+    if (currentStrategyType === 'ai_trading') {
+      const validTabs = ['coinSource', 'indicators', 'riskSettings', 'prompt']
+      if (!validTabs.includes(activeConfigTab)) {
+        setActiveConfigTab('coinSource')
+      }
+    }
+  }, [editingConfig?.strategy_type, activeConfigTab])
 
   // Right panel states
   const [activeRightTab, setActiveRightTab] = useState<'prompt' | 'test'>('prompt')
@@ -91,13 +140,6 @@ export function StrategyStudioPage() {
     duration_ms?: number
   } | null>(null)
   const [isRunningAiTest, setIsRunningAiTest] = useState(false)
-
-  const toggleSection = (section: keyof typeof expandedSections) => {
-    setExpandedSections((prev) => ({
-      ...prev,
-      [section]: !prev[section],
-    }))
-  }
 
   // Fetch AI Models
   const fetchAiModels = useCallback(async () => {
@@ -136,10 +178,10 @@ export function StrategyStudioPage() {
       const active = data.strategies?.find((s: Strategy) => s.is_active)
       if (active) {
         setSelectedStrategy(active)
-        setEditingConfig(active.config)
+        setEditingConfig(mergeWithDefaults(active.config))
       } else if (data.strategies?.length > 0) {
         setSelectedStrategy(data.strategies[0])
-        setEditingConfig(data.strategies[0].config)
+        setEditingConfig(mergeWithDefaults(data.strategies[0].config))
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unknown error')
@@ -544,30 +586,13 @@ export function StrategyStudioPage() {
   // Get current strategy type (default to ai_trading if not set)
   const currentStrategyType = editingConfig?.strategy_type || 'ai_trading'
 
-  const configSections = [
-    // Grid Config - only for grid_trading
-    {
-      key: 'gridConfig' as const,
-      icon: Activity,
-      color: '#0ECB81',
-      title: t('gridConfig'),
-      forStrategyType: 'grid_trading' as const,
-      content: editingConfig?.grid_config && (
-        <GridConfigEditor
-          config={editingConfig.grid_config}
-          onChange={(gridConfig) => updateConfig('grid_config', gridConfig)}
-          disabled={selectedStrategy?.is_default}
-          language={language}
-        />
-      ),
-    },
-    // AI Trading sections
+  // AI Trading Config Tabs
+  const aiTradingTabs = [
     {
       key: 'coinSource' as const,
       icon: Target,
       color: '#F0B90B',
       title: t('coinSource'),
-      forStrategyType: 'ai_trading' as const,
       content: editingConfig && (
         <CoinSourceEditor
           config={editingConfig.coin_source}
@@ -582,7 +607,6 @@ export function StrategyStudioPage() {
       icon: BarChart3,
       color: '#0ECB81',
       title: t('indicators'),
-      forStrategyType: 'ai_trading' as const,
       content: editingConfig && (
         <IndicatorEditor
           config={editingConfig.indicators}
@@ -593,14 +617,13 @@ export function StrategyStudioPage() {
       ),
     },
     {
-      key: 'riskControl' as const,
+      key: 'riskSettings' as const,
       icon: Shield,
       color: '#F6465D',
-      title: t('riskControl'),
-      forStrategyType: 'ai_trading' as const,
+      title: language === 'zh' ? '风控设置' : 'Risk Settings',
       content: editingConfig && (
-        <RiskControlEditor
-          config={editingConfig.risk_control}
+        <RiskSettingsEditor
+          riskControl={editingConfig.risk_control}
           onChange={(riskControl) => updateConfig('risk_control', riskControl)}
           disabled={selectedStrategy?.is_default}
           language={language}
@@ -608,68 +631,41 @@ export function StrategyStudioPage() {
       ),
     },
     {
-      key: 'promptSections' as const,
+      key: 'prompt' as const,
       icon: FileText,
-      color: '#a855f7',
-      title: t('promptSections'),
-      forStrategyType: 'ai_trading' as const,
-      content: editingConfig && (
-        <PromptSectionsEditor
-          config={editingConfig.prompt_sections}
-          onChange={(promptSections) => updateConfig('prompt_sections', promptSections)}
-          disabled={selectedStrategy?.is_default}
-          language={language}
-        />
-      ),
-    },
-    {
-      key: 'customPrompt' as const,
-      icon: Settings,
       color: '#60a5fa',
-      title: t('customPrompt'),
-      forStrategyType: 'ai_trading' as const,
+      title: t('promptSections'),
       content: editingConfig && (
-        <div>
-          <p className="text-xs mb-2" style={{ color: '#848E9C' }}>
-            {language === 'zh' ? '附加在 System Prompt 末尾的额外提示，用于补充个性化交易风格' : 'Extra prompt appended to System Prompt for personalized trading style'}
-          </p>
-          <textarea
-            value={editingConfig.custom_prompt || ''}
-            onChange={(e) => updateConfig('custom_prompt', e.target.value)}
+        <div className="space-y-4">
+          <PromptSectionsEditor
+            config={editingConfig.prompt_sections}
+            onChange={(promptSections) => updateConfig('prompt_sections', promptSections)}
             disabled={selectedStrategy?.is_default}
-            placeholder={language === 'zh' ? '输入自定义提示词...' : 'Enter custom prompt...'}
-            className="w-full h-32 px-3 py-2 rounded-lg resize-none font-mono text-xs"
-            style={{ background: '#0B0E11', border: '1px solid #2B3139', color: '#EAECEF' }}
+            language={language}
           />
+          <div className="rounded-lg p-4" style={{ background: '#0B0E11', border: '1px solid #2B3139' }}>
+            <div className="flex items-center gap-2 mb-2">
+              <Settings className="w-4 h-4" style={{ color: '#60a5fa' }} />
+              <span className="text-sm font-medium" style={{ color: '#EAECEF' }}>
+                {language === 'zh' ? '附加提示' : 'Extra Prompt'}
+              </span>
+            </div>
+            <p className="text-xs mb-2" style={{ color: '#848E9C' }}>
+              {language === 'zh' ? '附加在 System Prompt 末尾的额外提示' : 'Extra prompt appended to System Prompt'}
+            </p>
+            <textarea
+              value={editingConfig.custom_prompt || ''}
+              onChange={(e) => updateConfig('custom_prompt', e.target.value)}
+              disabled={selectedStrategy?.is_default}
+              placeholder={language === 'zh' ? '输入自定义提示词...' : 'Enter custom prompt...'}
+              className="w-full h-24 px-3 py-2 rounded-lg resize-none font-mono text-xs"
+              style={{ background: '#1E2329', border: '1px solid #2B3139', color: '#EAECEF' }}
+            />
+          </div>
         </div>
       ),
     },
-    {
-      key: 'publishSettings' as const,
-      icon: Globe,
-      color: '#0ECB81',
-      title: t('publishSettings'),
-      forStrategyType: 'both' as const,
-      content: selectedStrategy && (
-        <PublishSettingsEditor
-          isPublic={selectedStrategy.is_public ?? false}
-          configVisible={selectedStrategy.config_visible ?? true}
-          onIsPublicChange={(value) => {
-            setSelectedStrategy({ ...selectedStrategy, is_public: value })
-            setHasChanges(true)
-          }}
-          onConfigVisibleChange={(value) => {
-            setSelectedStrategy({ ...selectedStrategy, config_visible: value })
-            setHasChanges(true)
-          }}
-          disabled={selectedStrategy?.is_default}
-          language={language}
-        />
-      ),
-    },
-  ].filter(section =>
-    section.forStrategyType === 'both' || section.forStrategyType === currentStrategyType
-  )
+  ]
 
   return (
     <DeepVoidBackground className="h-[calc(100vh-64px)] flex flex-col bg-nofx-bg relative overflow-hidden">
@@ -729,7 +725,7 @@ export function StrategyStudioPage() {
                   key={strategy.id}
                   onClick={() => {
                     setSelectedStrategy(strategy)
-                    setEditingConfig(strategy.config)
+                    setEditingConfig(mergeWithDefaults(strategy.config))
                     setHasChanges(false)
                     setPromptPreview(null)
                     setAiTestResult(null)
@@ -851,89 +847,110 @@ export function StrategyStudioPage() {
 
               {/* Strategy Type Selector */}
               {editingConfig && (
-                <div className="mb-4 p-4 rounded-lg bg-nofx-bg-lighter border border-nofx-gold/20">
-                  <div className="flex items-center gap-2 mb-3">
-                    <Zap className="w-4 h-4" style={{ color: '#F0B90B' }} />
-                    <span className="text-sm font-medium text-nofx-text">{t('strategyType')}</span>
-                  </div>
-                  <div className="grid grid-cols-2 gap-3">
+                <div className="mb-4 p-3 rounded-lg bg-nofx-bg-lighter border border-nofx-gold/20">
+                  <div className="grid grid-cols-2 gap-2">
                     <button
                       onClick={() => {
                         if (!selectedStrategy?.is_default) {
                           updateConfig('strategy_type', 'ai_trading')
-                          // Clear grid config when switching to AI trading
                           updateConfig('grid_config', undefined)
+                          setActiveConfigTab('coinSource')
                         }
                       }}
                       disabled={selectedStrategy?.is_default}
-                      className={`p-3 rounded-lg border transition-all ${
+                      className={`p-2 rounded-lg border transition-all ${
                         (!editingConfig.strategy_type || editingConfig.strategy_type === 'ai_trading')
                           ? 'border-nofx-gold bg-nofx-gold/10'
                           : 'border-nofx-border hover:border-nofx-gold/50'
                       }`}
                     >
-                      <div className="flex items-center gap-2 mb-1">
+                      <div className="flex items-center gap-2">
                         <Bot className="w-4 h-4" style={{ color: '#F0B90B' }} />
                         <span className="text-sm font-medium text-nofx-text">{t('aiTrading')}</span>
                       </div>
-                      <p className="text-xs text-nofx-text-muted text-left">{t('aiTradingDesc')}</p>
                     </button>
                     <button
                       onClick={() => {
                         if (!selectedStrategy?.is_default) {
                           updateConfig('strategy_type', 'grid_trading')
-                          // Initialize grid config if not exists
                           if (!editingConfig.grid_config) {
                             updateConfig('grid_config', defaultGridConfig)
                           }
                         }
                       }}
                       disabled={selectedStrategy?.is_default}
-                      className={`p-3 rounded-lg border transition-all ${
+                      className={`p-2 rounded-lg border transition-all ${
                         editingConfig.strategy_type === 'grid_trading'
                           ? 'border-nofx-gold bg-nofx-gold/10'
                           : 'border-nofx-border hover:border-nofx-gold/50'
                       }`}
                     >
-                      <div className="flex items-center gap-2 mb-1">
+                      <div className="flex items-center gap-2">
                         <Activity className="w-4 h-4" style={{ color: '#0ECB81' }} />
                         <span className="text-sm font-medium text-nofx-text">{t('gridTrading')}</span>
                       </div>
-                      <p className="text-xs text-nofx-text-muted text-left">{t('gridTradingDesc')}</p>
                     </button>
                   </div>
                 </div>
               )}
 
-              {/* Config Sections */}
-              <div className="space-y-2">
-                {configSections.map(({ key, icon: Icon, color, title, content }) => (
-                  <div
-                    key={key}
-                    className="rounded-lg overflow-hidden bg-nofx-bg-lighter border border-nofx-gold/20"
-                  >
-                    <button
-                      onClick={() => toggleSection(key)}
-                      className="w-full flex items-center justify-between px-3 py-2.5 hover:bg-white/5 transition-colors"
-                    >
-                      <div className="flex items-center gap-2">
-                        <Icon className="w-4 h-4" style={{ color }} />
-                        <span className="text-sm font-medium text-nofx-text">{title}</span>
-                      </div>
-                      {expandedSections[key] ? (
-                        <ChevronDown className="w-4 h-4 text-nofx-text-muted" />
-                      ) : (
-                        <ChevronRight className="w-4 h-4 text-nofx-text-muted" />
-                      )}
-                    </button>
-                    {expandedSections[key] && (
-                      <div className="px-3 pb-3">
-                        {content}
-                      </div>
-                    )}
+              {/* Config Tabs - Only for AI Trading */}
+              {currentStrategyType === 'ai_trading' && (
+                <>
+                  {/* Tab Navigation */}
+                  <div className="flex gap-1 mb-4 p-1 rounded-lg bg-nofx-bg-lighter border border-nofx-gold/10 overflow-x-auto">
+                    {aiTradingTabs.map(({ key, icon: Icon, color, title }) => (
+                      <button
+                        key={key}
+                        onClick={() => setActiveConfigTab(key)}
+                        className={`flex items-center gap-1.5 px-3 py-2 rounded-md text-xs font-medium whitespace-nowrap transition-all ${
+                          activeConfigTab === key
+                            ? 'bg-nofx-gold/20 text-nofx-gold border border-nofx-gold/30'
+                            : 'text-nofx-text-muted hover:text-nofx-text hover:bg-white/5'
+                        }`}
+                      >
+                        <Icon className="w-3.5 h-3.5" style={{ color: activeConfigTab === key ? color : undefined }} />
+                        {title}
+                      </button>
+                    ))}
                   </div>
-                ))}
-              </div>
+
+                  {/* Tab Content */}
+                  <div className="flex-1 overflow-y-auto">
+                    {aiTradingTabs.find(tab => tab.key === activeConfigTab)?.content}
+                  </div>
+                </>
+              )}
+
+              {/* Grid Config - Direct render for grid trading */}
+              {currentStrategyType === 'grid_trading' && editingConfig?.grid_config && (
+                <GridConfigEditor
+                  config={editingConfig.grid_config}
+                  onChange={(gridConfig) => updateConfig('grid_config', gridConfig)}
+                  disabled={selectedStrategy?.is_default}
+                  language={language}
+                />
+              )}
+
+              {/* Publish Settings - Always at bottom */}
+              {selectedStrategy && (
+                <div className="mt-4 pt-4 border-t border-nofx-gold/20">
+                  <PublishSettingsEditor
+                    isPublic={selectedStrategy.is_public ?? false}
+                    configVisible={selectedStrategy.config_visible ?? true}
+                    onIsPublicChange={(value) => {
+                      setSelectedStrategy({ ...selectedStrategy, is_public: value })
+                      setHasChanges(true)
+                    }}
+                    onConfigVisibleChange={(value) => {
+                      setSelectedStrategy({ ...selectedStrategy, config_visible: value })
+                      setHasChanges(true)
+                    }}
+                    disabled={selectedStrategy?.is_default}
+                    language={language}
+                  />
+                </div>
+              )}
             </div>
           ) : (
             <div className="flex items-center justify-center h-full">

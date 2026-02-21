@@ -314,41 +314,32 @@ func formatCandidateCoinsZH(ctx *Context) string {
 	return sb.String()
 }
 
-// formatKlineDataZH 格式化K线数据（中文）
+// formatKlineDataZH 格式化K线数据（中文）- 紧凑格式
 func formatKlineDataZH(symbol string, tfData map[string]*market.TimeframeSeriesData, timeframes []string) string {
 	var sb strings.Builder
 
 	for _, tf := range timeframes {
 		if data, ok := tfData[tf]; ok && len(data.Klines) > 0 {
-			sb.WriteString(fmt.Sprintf("#### %s 时间框架 (从旧到新)\n\n", tf))
-			sb.WriteString("```\n")
-			sb.WriteString("时间(UTC)      开盘      最高      最低      收盘      成交量\n")
+			sb.WriteString(fmt.Sprintf("**%s**: ", tf))
+			sb.WriteString("```Time,O,H,L,C,Vol\n")
 
-			// 只显示最近30根K线
+			// 只显示最近20根K线（从30减少到20）
 			startIdx := 0
-			if len(data.Klines) > 30 {
-				startIdx = len(data.Klines) - 30
+			if len(data.Klines) > 20 {
+				startIdx = len(data.Klines) - 20
 			}
 
 			for i := startIdx; i < len(data.Klines); i++ {
 				k := data.Klines[i]
 				t := time.UnixMilli(k.Time).UTC()
-				sb.WriteString(fmt.Sprintf("%s    %.4f    %.4f    %.4f    %.4f    %.2f\n",
+				// 紧凑格式：时间,O,H,L,C,Vol
+				sb.WriteString(fmt.Sprintf("%s,%.4f,%.4f,%.4f,%.4f,%.0f\n",
 					t.Format("01-02 15:04"),
-					k.Open,
-					k.High,
-					k.Low,
-					k.Close,
-					k.Volume,
+					k.Open, k.High, k.Low, k.Close, k.Volume,
 				))
 			}
 
-			// 标记最后一根K线
-			if len(data.Klines) > 0 {
-				sb.WriteString("    <- 当前\n")
-			}
-
-			sb.WriteString("```\n\n")
+			sb.WriteString("```\n")
 		}
 	}
 
@@ -576,7 +567,7 @@ func formatCandidateCoinsEN(ctx *Context) string {
 	return sb.String()
 }
 
-// formatKlineDataEN 格式化K线数据（英文）
+// formatKlineDataEN 格式化K线数据（英文）- 紧凑格式
 func formatKlineDataEN(symbol string, tfData map[string]*market.TimeframeSeriesData, timeframes []string) string {
 	var sb strings.Builder
 
@@ -587,33 +578,26 @@ func formatKlineDataEN(symbol string, tfData map[string]*market.TimeframeSeriesD
 
 	for _, tf := range sortedTF {
 		if data, ok := tfData[tf]; ok && len(data.Klines) > 0 {
-			sb.WriteString(fmt.Sprintf("#### %s Timeframe (oldest → latest)\n\n", tf))
-			sb.WriteString("```\n")
-			sb.WriteString("Time(UTC)      Open      High      Low       Close     Volume\n")
+			sb.WriteString(fmt.Sprintf("**%s**: ", tf))
+			sb.WriteString("```Time,O,H,L,C,Vol\n")
 
+			// 只显示最近20根K线（从30减少到20）
 			startIdx := 0
-			if len(data.Klines) > 30 {
-				startIdx = len(data.Klines) - 30
+			if len(data.Klines) > 20 {
+				startIdx = len(data.Klines) - 20
 			}
 
 			for i := startIdx; i < len(data.Klines); i++ {
 				k := data.Klines[i]
 				t := time.UnixMilli(k.Time).UTC()
-				sb.WriteString(fmt.Sprintf("%s    %.4f    %.4f    %.4f    %.4f    %.2f\n",
+				// 紧凑格式：时间,O,H,L,C,Vol
+				sb.WriteString(fmt.Sprintf("%s,%.4f,%.4f,%.4f,%.4f,%.0f\n",
 					t.Format("01-02 15:04"),
-					k.Open,
-					k.High,
-					k.Low,
-					k.Close,
-					k.Volume,
+					k.Open, k.High, k.Low, k.Close, k.Volume,
 				))
 			}
 
-			if len(data.Klines) > 0 {
-				sb.WriteString("    <- current\n")
-			}
-
-			sb.WriteString("```\n\n")
+			sb.WriteString("```\n")
 		}
 	}
 

@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import type { DecisionRecord, DecisionAction } from '../types'
+import type { DecisionRecord, DecisionAction, SignalScore, TrendAnalysis } from '../types'
 import { t, type Language } from '../i18n/translations'
 
 interface DecisionCardProps {
@@ -40,6 +40,145 @@ function getConfidenceColor(confidence: number | undefined): string {
   if (confidence >= 80) return '#0ECB81'
   if (confidence >= 60) return '#F0B90B'
   return '#F6465D'
+}
+
+// Get signal score color
+function getSignalScoreColor(score: number): string {
+  if (score >= 70) return '#0ECB81'
+  if (score >= 50) return '#F0B90B'
+  return '#F6465D'
+}
+
+// Get trend direction icon and color
+function getTrendDisplay(direction: string): { icon: string; color: string; label: string } {
+  switch (direction?.toLowerCase()) {
+    case 'up':
+    case 'uptrend':
+      return { icon: '📈', color: '#0ECB81', label: 'UP' }
+    case 'down':
+    case 'downtrend':
+      return { icon: '📉', color: '#F6465D', label: 'DOWN' }
+    default:
+      return { icon: '➡️', color: '#848E9C', label: 'SIDEWAYS' }
+  }
+}
+
+// Signal Score Display Component
+function SignalScoreDisplay({ score, language }: { score: SignalScore; language: Language }) {
+  const scoreColor = getSignalScoreColor(score.total)
+
+  return (
+    <div
+      className="rounded-lg p-3 mb-2"
+      style={{ background: 'rgba(14, 203, 129, 0.05)', border: '1px solid rgba(14, 203, 129, 0.2)' }}
+    >
+      <div className="flex items-center justify-between mb-2">
+        <span className="text-xs font-medium" style={{ color: '#848E9C' }}>
+          {language === 'zh' ? '📊 信号评分' : '📊 Signal Score'}
+        </span>
+        <div className="flex items-center gap-2">
+          <span className="font-bold text-lg" style={{ color: scoreColor }}>
+            {score.total}
+          </span>
+          <span className="text-xs" style={{ color: '#848E9C' }}>/100</span>
+        </div>
+      </div>
+
+      {/* Score breakdown */}
+      <div className="grid grid-cols-4 gap-2 text-xs">
+        <div className="text-center">
+          <div className="font-mono" style={{ color: '#60a5fa' }}>{score.rsi_score}</div>
+          <div style={{ color: '#848E9C' }}>RSI</div>
+        </div>
+        <div className="text-center">
+          <div className="font-mono" style={{ color: '#0ECB81' }}>{score.ema_score}</div>
+          <div style={{ color: '#848E9C' }}>EMA</div>
+        </div>
+        <div className="text-center">
+          <div className="font-mono" style={{ color: '#F0B90B' }}>{score.volume_price_score}</div>
+          <div style={{ color: '#848E9C' }}>{language === 'zh' ? '量价' : 'Vol'}</div>
+        </div>
+        <div className="text-center">
+          <div className="font-mono" style={{ color: '#a855f7' }}>{score.multi_tf_score}</div>
+          <div style={{ color: '#848E9C' }}>{language === 'zh' ? '多周期' : 'TF'}</div>
+        </div>
+      </div>
+
+      {/* Score bar */}
+      <div className="mt-2 h-1.5 rounded-full" style={{ background: '#2B3139' }}>
+        <div
+          className="h-full rounded-full transition-all duration-300"
+          style={{
+            width: `${score.total}%`,
+            background: scoreColor
+          }}
+        />
+      </div>
+    </div>
+  )
+}
+
+// Trend Analysis Display Component
+function TrendAnalysisDisplay({ analysis, language }: { analysis: TrendAnalysis; language: Language }) {
+  const trend = getTrendDisplay(analysis.direction)
+
+  return (
+    <div
+      className="rounded-lg p-3"
+      style={{ background: 'rgba(96, 165, 250, 0.05)', border: '1px solid rgba(96, 165, 250, 0.2)' }}
+    >
+      <div className="flex items-center justify-between mb-2">
+        <span className="text-xs font-medium" style={{ color: '#848E9C' }}>
+          {language === 'zh' ? '📈 趋势分析' : '📈 Trend Analysis'}
+        </span>
+        <div className="flex items-center gap-2">
+          <span>{trend.icon}</span>
+          <span className="font-medium" style={{ color: trend.color }}>{trend.label}</span>
+          <span className="text-xs" style={{ color: '#848E9C' }}>
+            ({analysis.strength}%)
+          </span>
+        </div>
+      </div>
+
+      {/* Trend details */}
+      <div className="flex flex-wrap gap-2 text-xs">
+        {analysis.is_confirmed !== undefined && (
+          <span
+            className="px-2 py-0.5 rounded"
+            style={{
+              background: analysis.is_confirmed ? 'rgba(14, 203, 129, 0.15)' : 'rgba(246, 70, 93, 0.15)',
+              color: analysis.is_confirmed ? '#0ECB81' : '#F6465D'
+            }}
+          >
+            {analysis.is_confirmed
+              ? (language === 'zh' ? '✓ 多周期确认' : '✓ Multi-TF Confirmed')
+              : (language === 'zh' ? '✗ 未确认' : '✗ Not Confirmed')}
+          </span>
+        )}
+        {analysis.ema_alignment && (
+          <span className="px-2 py-0.5 rounded" style={{ background: 'rgba(132, 142, 156, 0.15)', color: '#848E9C' }}>
+            EMA: {analysis.ema_alignment}
+          </span>
+        )}
+        {analysis.primary_tf && analysis.confirm_tf && (
+          <span className="px-2 py-0.5 rounded" style={{ background: 'rgba(132, 142, 156, 0.15)', color: '#848E9C' }}>
+            {analysis.primary_tf} + {analysis.confirm_tf}
+          </span>
+        )}
+      </div>
+
+      {/* Strength bar */}
+      <div className="mt-2 h-1.5 rounded-full" style={{ background: '#2B3139' }}>
+        <div
+          className="h-full rounded-full transition-all duration-300"
+          style={{
+            width: `${analysis.strength}%`,
+            background: trend.color
+          }}
+        />
+      </div>
+    </div>
+  )
 }
 
 // Single Action Card Component
@@ -211,6 +350,43 @@ function ActionCard({ action, language, onSymbolClick }: { action: DecisionActio
           }}
         >
           ❌ {action.error}
+        </div>
+      )}
+
+      {/* Validation Result */}
+      {action.validation_result && (
+        <div className="mt-3 pt-3" style={{ borderTop: '1px solid #2B3139' }}>
+          <div className="flex items-center gap-2 mb-2">
+            <span className="text-sm">
+              {action.validation_result.passed ? '✅' : '❌'}
+            </span>
+            <span className="text-xs font-medium" style={{ color: '#848E9C' }}>
+              {action.validation_result.passed
+                ? (language === 'zh' ? '验证通过' : 'Validation Passed')
+                : (language === 'zh' ? '验证失败' : 'Validation Failed')}
+            </span>
+            {action.validation_result.validation_error && (
+              <span className="text-xs" style={{ color: '#F6465D' }}>
+                - {action.validation_result.validation_error}
+              </span>
+            )}
+          </div>
+
+          {/* Signal Score */}
+          {action.validation_result.signal_score && (
+            <SignalScoreDisplay
+              score={action.validation_result.signal_score}
+              language={language}
+            />
+          )}
+
+          {/* Trend Analysis */}
+          {action.validation_result.trend_analysis && (
+            <TrendAnalysisDisplay
+              analysis={action.validation_result.trend_analysis}
+              language={language}
+            />
+          )}
         </div>
       )}
     </div>

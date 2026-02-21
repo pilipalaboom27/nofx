@@ -56,6 +56,37 @@ export interface DecisionAction {
   timestamp: string
   success: boolean
   error?: string
+  validation_result?: DecisionValidationResult  // Validation result from backend
+}
+
+// Signal score breakdown
+export interface SignalScore {
+  total: number           // Total score (0-100)
+  rsi_score: number       // RSI score (0-25)
+  ema_score: number       // EMA trend score (0-25)
+  volume_price_score: number  // Volume-price alignment score (0-20)
+  multi_tf_score: number  // Multi-timeframe resonance score (0-30)
+  details?: string        // Score details
+}
+
+// Trend analysis result
+export interface TrendAnalysis {
+  direction: string       // Trend direction: 'up', 'down', 'sideways'
+  strength: number        // Trend strength (0-100)
+  primary_tf?: string     // Primary timeframe
+  confirm_tf?: string     // Confirmation timeframe
+  is_confirmed?: boolean  // Multi-timeframe confirmed
+  ema_alignment?: string  // EMA alignment state
+  price_position?: string // Price position relative to EMA
+  details?: string        // Detailed explanation
+}
+
+// Decision validation result from backend
+export interface DecisionValidationResult {
+  passed: boolean
+  signal_score?: SignalScore
+  trend_analysis?: TrendAnalysis
+  validation_error?: string
 }
 
 export interface AccountSnapshot {
@@ -589,6 +620,50 @@ export interface ExternalDataSource {
   refresh_secs?: number;
 }
 
+// Trading Discipline Configuration (CODE ENFORCED)
+export interface TradingDisciplineConfig {
+  // === Minimum Holding Time ===
+  enable_min_holding_time: boolean;    // Enable minimum holding time check
+  min_holding_minutes: number;         // Minimum holding time in minutes (default: 30)
+
+  // === Entry Indicator Validation (Prevent Chasing) ===
+  enable_entry_indicators: boolean;    // Enable indicator-based entry validation
+  max_rsi_for_long: number;            // Max RSI for long entry - prevent buying at overbought (default: 70)
+  min_rsi_for_short: number;           // Min RSI for short entry - prevent selling at oversold (default: 30)
+  max_price_deviation_pct: number;     // Max price deviation from EMA20 in percent (default: 5%)
+
+  // === Mandatory Stop-Loss/Take-Profit ===
+  require_stop_loss: boolean;          // Require stop-loss for all positions
+  require_take_profit: boolean;        // Require take-profit for all positions
+
+  // === Close Position Restrictions ===
+  enable_close_restrictions: boolean;  // Enable close position restrictions
+  min_loss_pct_for_early_close: number; // Min loss % to allow early close (negative, e.g., -3.0)
+  close_reasoning_min_length: number;  // Min characters for close reasoning
+}
+
+// Conservative Strategy Configuration (CODE ENFORCED)
+// Focus on fewer but higher quality trades, following trends
+export interface ConservativeStrategyConfig {
+  // === Daily Limits ===
+  enable_daily_limits: boolean;        // Enable daily trading limits
+  max_daily_trades: number;            // Maximum number of trades per day (default: 3)
+  max_daily_loss_pct: number;          // Maximum daily loss percentage (negative, e.g., -5.0)
+
+  // === Signal Quality Scoring ===
+  enable_signal_scoring: boolean;      // Enable signal quality scoring
+  min_signal_score: number;            // Minimum signal score to accept trade (0-100, default: 60)
+
+  // === Trend Confirmation ===
+  enable_trend_confirm: boolean;       // Enable trend confirmation
+  require_multi_timeframe: boolean;    // Require multi-timeframe trend confirmation (15M + 1H must align)
+
+  // === Trailing Stop ===
+  enable_trailing_stop: boolean;       // Enable trailing stop-loss
+  trail_after_profit_pct: number;      // Profit percentage to trigger trailing stop (default: 2%)
+  trail_to_breakeven_at: number;       // Profit percentage to move stop-loss to breakeven (default: 5%)
+}
+
 export interface RiskControlConfig {
   // Max number of coins held simultaneously (CODE ENFORCED)
   max_positions: number;
@@ -607,6 +682,12 @@ export interface RiskControlConfig {
   min_position_size: number;       // Min position size in USDT (CODE ENFORCED)
   min_risk_reward_ratio: number;   // Min take_profit / stop_loss ratio (AI guided)
   min_confidence: number;          // Min AI confidence to open position (AI guided)
+
+  // Trading Discipline Configuration (CODE ENFORCED)
+  trading_discipline?: TradingDisciplineConfig;
+
+  // Conservative Strategy Configuration (CODE ENFORCED)
+  conservative_strategy?: ConservativeStrategyConfig;
 }
 
 // Debate Arena Types

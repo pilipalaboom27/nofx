@@ -149,6 +149,17 @@ type Decision struct {
 	Confidence int     `json:"confidence,omitempty"` // Confidence level (0-100)
 	RiskUSD    float64 `json:"risk_usd,omitempty"`   // Maximum USD risk
 	Reasoning  string  `json:"reasoning"`
+
+	// Validation result (populated after validation)
+	ValidationResult *DecisionValidationResult `json:"validation_result,omitempty"`
+}
+
+// DecisionValidationResult validation result for a decision
+type DecisionValidationResult struct {
+	Passed           bool          `json:"passed"`
+	SignalScore      *SignalScore  `json:"signal_score,omitempty"`
+	TrendAnalysis    *TrendAnalysis `json:"trend_analysis,omitempty"`
+	ValidationError  string        `json:"validation_error,omitempty"`
 }
 
 // FullDecision AI's complete decision (including chain of thought)
@@ -308,6 +319,9 @@ func GetFullDecisionWithStrategy(ctx *Context, mcpClient mcp.AIClient, engine *S
 		riskConfig.AltcoinMaxLeverage,
 		riskConfig.BTCETHMaxPositionValueRatio,
 		riskConfig.AltcoinMaxPositionValueRatio,
+		riskConfig.TradingDiscipline,
+		riskConfig.ConservativeStrategy,
+		ctx,
 	)
 
 	if decision != nil {
@@ -976,6 +990,45 @@ func (e *StrategyEngine) BuildSystemPrompt(accountEquity float64, variant string
 	sb.WriteString(fmt.Sprintf("- Risk-Reward Ratio: ≥1:%.1f (take_profit / stop_loss)\n", riskControl.MinRiskRewardRatio))
 	sb.WriteString(fmt.Sprintf("- Min Confidence: ≥%d to open position\n\n", riskControl.MinConfidence))
 
+	// Trading Discipline Rules (if enabled)
+	discipline := riskControl.TradingDiscipline
+	if discipline.EnableMinHoldingTime || discipline.EnableEntryIndicators || discipline.EnableCloseRestrictions {
+		sb.WriteString("# 🔒 Trading Discipline Rules (CODE ENFORCED)\n\n")
+		sb.WriteString("**IMPORTANT: These rules are enforced by backend code. Attempts to bypass them will be REJECTED.**\n\n")
+
+		if discipline.EnableMinHoldingTime {
+			sb.WriteString("## Minimum Holding Time\n")
+			sb.WriteString(fmt.Sprintf("- Positions must be held for at least **%d minutes** before closing\n", discipline.MinHoldingMinutes))
+			sb.WriteString(fmt.Sprintf("- Early closes will be REJECTED unless loss exceeds %.1f%% (stop-loss trigger is allowed)\n", -discipline.MinLossPctForEarlyClose))
+			sb.WriteString("- Do NOT close positions impulsively - wait for your thesis to play out\n\n")
+		}
+
+		if discipline.EnableEntryIndicators {
+			sb.WriteString("## Entry Indicator Validation (Prevent Chasing)\n")
+			sb.WriteString("**DO NOT open positions in these conditions:**\n")
+			sb.WriteString(fmt.Sprintf("- Long entry: RSI > **%d** (overbought, chasing highs)\n", discipline.MaxRSIForLong))
+			sb.WriteString(fmt.Sprintf("- Short entry: RSI < **%d** (oversold, chasing lows)\n", discipline.MinRSIForShort))
+			sb.WriteString(fmt.Sprintf("- Any entry: Price deviates > **%.1f%%** from EMA20 (chasing extreme moves)\n\n", discipline.MaxPriceDeviationPct))
+		}
+
+		if discipline.RequireStopLoss || discipline.RequireTakeProfit {
+			sb.WriteString("## Mandatory Stop-Loss/Take-Profit\n")
+			if discipline.RequireStopLoss {
+				sb.WriteString("- **Stop-loss is REQUIRED** for all new positions\n")
+			}
+			if discipline.RequireTakeProfit {
+				sb.WriteString("- **Take-profit is REQUIRED** for all new positions\n")
+			}
+			sb.WriteString("- Opening without SL/TP will be REJECTED\n\n")
+		}
+
+		if discipline.EnableCloseRestrictions {
+			sb.WriteString("## Close Position Restrictions\n")
+			sb.WriteString(fmt.Sprintf("- Close reasoning must be at least **%d characters** (explain WHY)\n", discipline.CloseReasoningMinLength))
+			sb.WriteString("- Vague reasons like \"market conditions\" are NOT acceptable\n\n")
+		}
+	}
+
 	// Position sizing guidance
 	sb.WriteString("## Position Sizing Guidance\n")
 	sb.WriteString("Calculate `position_size_usd` based on your confidence and the Position Value Limits above:\n")
@@ -1241,6 +1294,12 @@ func (e *StrategyEngine) BuildUserPrompt(ctx *Context) string {
 		sb.WriteString("Current Positions: None\n\n")
 	}
 
+	// Signal Pre-Score for Candidate Coins (if signal scoring is enabled)
+	conservativeConfig := e.config.RiskControl.ConservativeStrategy
+	if conservativeConfig.EnableSignalScoring && len(ctx.CandidateCoins) > 0 {
+		sb.WriteString(e.formatSignalPreScore(ctx, conservativeConfig))
+	}
+
 	// Candidate coins (exclude coins already in positions to avoid duplicate data)
 	positionSymbols := make(map[string]bool)
 	for _, pos := range ctx.Positions {
@@ -1383,6 +1442,116 @@ func (e *StrategyEngine) formatCoinSourceTag(sources []string) string {
 		}
 	}
 	return ""
+}
+
+// formatSignalPreScore formats signal pre-scores for candidate coins
+// This helps AI understand signal quality before making decisions
+func (e *StrategyEngine) formatSignalPreScore(ctx *Context, config store.ConservativeStrategyConfig) string {
+	var sb strings.Builder
+	lang := e.GetLanguage()
+
+	if lang == LangChinese {
+		sb.WriteString("## 候选币种信号预评分 (阈值: ")
+		sb.WriteString(fmt.Sprintf("%d/100)\n\n", config.MinSignalScore))
+		sb.WriteString("> 以下评分由系统预先计算，供您决策参考。评分低于阈值的币种建议谨慎操作。\n\n")
+	} else {
+		sb.WriteString("## Signal Pre-Score for Candidate Coins (Threshold: ")
+		sb.WriteString(fmt.Sprintf("%d/100)\n\n", config.MinSignalScore))
+		sb.WriteString("> Pre-calculated scores for your reference. Be cautious with coins below threshold.\n\n")
+	}
+
+	for _, coin := range ctx.CandidateCoins {
+		// Check if market data exists
+		if _, hasData := ctx.MarketDataMap[coin.Symbol]; !hasData {
+			continue
+		}
+
+		// Calculate score for both long and short scenarios
+		longScore := CalculateSignalScore(ctx, &Decision{Symbol: coin.Symbol, Action: "open_long"}, &config)
+		shortScore := CalculateSignalScore(ctx, &Decision{Symbol: coin.Symbol, Action: "open_short"}, &config)
+
+		// Get trend analysis
+		trendAnalysis := AnalyzeTrend(ctx, coin.Symbol)
+
+		if lang == LangChinese {
+			sb.WriteString(fmt.Sprintf("### %s\n", coin.Symbol))
+			sb.WriteString(fmt.Sprintf("- **做多评分**: %d/100", longScore.Total))
+			if longScore.Total < config.MinSignalScore {
+				sb.WriteString(" ⚠️ (低于阈值)")
+			}
+			sb.WriteString("\n")
+			sb.WriteString(fmt.Sprintf("  - RSI位置: %d/25 | EMA趋势: %d/25 | 量价配合: %d/20 | 多周期共振: %d/30\n",
+				longScore.RSIScore, longScore.EMAScore, longScore.VolumePriceScore, longScore.MultiTFScore))
+
+			sb.WriteString(fmt.Sprintf("- **做空评分**: %d/100", shortScore.Total))
+			if shortScore.Total < config.MinSignalScore {
+				sb.WriteString(" ⚠️ (低于阈值)")
+			}
+			sb.WriteString("\n")
+			sb.WriteString(fmt.Sprintf("  - RSI位置: %d/25 | EMA趋势: %d/25 | 量价配合: %d/20 | 多周期共振: %d/30\n",
+				shortScore.RSIScore, shortScore.EMAScore, shortScore.VolumePriceScore, shortScore.MultiTFScore))
+
+			sb.WriteString(fmt.Sprintf("- **趋势分析**: %s (强度 %d/100)", trendAnalysis.Direction.ChineseString(), trendAnalysis.Strength))
+			if trendAnalysis.IsConfirmed {
+				sb.WriteString(" ✓ 多周期确认")
+			} else {
+				sb.WriteString(" ✗ 未确认")
+			}
+			sb.WriteString("\n")
+
+			// Recommendation based on scores
+			if longScore.Total >= config.MinSignalScore && longScore.Total > shortScore.Total {
+				sb.WriteString("- **建议**: 信号质量良好，可考虑做多\n")
+			} else if shortScore.Total >= config.MinSignalScore && shortScore.Total > longScore.Total {
+				sb.WriteString("- **建议**: 信号质量良好，可考虑做空\n")
+			} else if longScore.Total >= config.MinSignalScore || shortScore.Total >= config.MinSignalScore {
+				sb.WriteString("- **建议**: 信号质量一般，谨慎操作\n")
+			} else {
+				sb.WriteString("- **建议**: 信号质量不足，建议观望\n")
+			}
+			sb.WriteString("\n")
+		} else {
+			sb.WriteString(fmt.Sprintf("### %s\n", coin.Symbol))
+			sb.WriteString(fmt.Sprintf("- **LONG Score**: %d/100", longScore.Total))
+			if longScore.Total < config.MinSignalScore {
+				sb.WriteString(" ⚠️ (below threshold)")
+			}
+			sb.WriteString("\n")
+			sb.WriteString(fmt.Sprintf("  - RSI Position: %d/25 | EMA Trend: %d/25 | Volume-Price: %d/20 | Multi-TF: %d/30\n",
+				longScore.RSIScore, longScore.EMAScore, longScore.VolumePriceScore, longScore.MultiTFScore))
+
+			sb.WriteString(fmt.Sprintf("- **SHORT Score**: %d/100", shortScore.Total))
+			if shortScore.Total < config.MinSignalScore {
+				sb.WriteString(" ⚠️ (below threshold)")
+			}
+			sb.WriteString("\n")
+			sb.WriteString(fmt.Sprintf("  - RSI Position: %d/25 | EMA Trend: %d/25 | Volume-Price: %d/20 | Multi-TF: %d/30\n",
+				shortScore.RSIScore, shortScore.EMAScore, shortScore.VolumePriceScore, shortScore.MultiTFScore))
+
+			sb.WriteString(fmt.Sprintf("- **Trend**: %s (Strength %d/100)", trendAnalysis.Direction.String(), trendAnalysis.Strength))
+			if trendAnalysis.IsConfirmed {
+				sb.WriteString(" ✓ Multi-TF confirmed")
+			} else {
+				sb.WriteString(" ✗ Not confirmed")
+			}
+			sb.WriteString("\n")
+
+			// Recommendation based on scores
+			if longScore.Total >= config.MinSignalScore && longScore.Total > shortScore.Total {
+				sb.WriteString("- **Suggestion**: Good signal quality, consider LONG\n")
+			} else if shortScore.Total >= config.MinSignalScore && shortScore.Total > longScore.Total {
+				sb.WriteString("- **Suggestion**: Good signal quality, consider SHORT\n")
+			} else if longScore.Total >= config.MinSignalScore || shortScore.Total >= config.MinSignalScore {
+				sb.WriteString("- **Suggestion**: Moderate signal quality, trade cautiously\n")
+			} else {
+				sb.WriteString("- **Suggestion**: Insufficient signal quality, recommend WAIT\n")
+			}
+			sb.WriteString("\n")
+		}
+	}
+
+	sb.WriteString("\n")
+	return sb.String()
 }
 
 // ============================================================================
@@ -1671,7 +1840,7 @@ func formatFloatSlice(values []float64) string {
 // AI Response Parsing
 // ============================================================================
 
-func parseFullDecisionResponse(aiResponse string, accountEquity float64, btcEthLeverage, altcoinLeverage int, btcEthPosRatio, altcoinPosRatio float64) (*FullDecision, error) {
+func parseFullDecisionResponse(aiResponse string, accountEquity float64, btcEthLeverage, altcoinLeverage int, btcEthPosRatio, altcoinPosRatio float64, tradingDiscipline store.TradingDisciplineConfig, conservativeStrategy store.ConservativeStrategyConfig, ctx *Context) (*FullDecision, error) {
 	cotTrace := extractCoTTrace(aiResponse)
 
 	decisions, err := extractDecisions(aiResponse)
@@ -1682,7 +1851,7 @@ func parseFullDecisionResponse(aiResponse string, accountEquity float64, btcEthL
 		}, fmt.Errorf("failed to extract decisions: %w", err)
 	}
 
-	if err := validateDecisions(decisions, accountEquity, btcEthLeverage, altcoinLeverage, btcEthPosRatio, altcoinPosRatio); err != nil {
+	if err := validateDecisions(decisions, accountEquity, btcEthLeverage, altcoinLeverage, btcEthPosRatio, altcoinPosRatio, tradingDiscipline, conservativeStrategy, ctx); err != nil {
 		return &FullDecision{
 			CoTTrace:  cotTrace,
 			Decisions: decisions,
@@ -1848,16 +2017,16 @@ func compactArrayOpen(s string) string {
 // Decision Validation
 // ============================================================================
 
-func validateDecisions(decisions []Decision, accountEquity float64, btcEthLeverage, altcoinLeverage int, btcEthPosRatio, altcoinPosRatio float64) error {
+func validateDecisions(decisions []Decision, accountEquity float64, btcEthLeverage, altcoinLeverage int, btcEthPosRatio, altcoinPosRatio float64, tradingDiscipline store.TradingDisciplineConfig, conservativeStrategy store.ConservativeStrategyConfig, ctx *Context) error {
 	for i := range decisions {
-		if err := validateDecision(&decisions[i], accountEquity, btcEthLeverage, altcoinLeverage, btcEthPosRatio, altcoinPosRatio); err != nil {
+		if err := validateDecision(&decisions[i], accountEquity, btcEthLeverage, altcoinLeverage, btcEthPosRatio, altcoinPosRatio, tradingDiscipline, conservativeStrategy, ctx); err != nil {
 			return fmt.Errorf("decision #%d validation failed: %w", i+1, err)
 		}
 	}
 	return nil
 }
 
-func validateDecision(d *Decision, accountEquity float64, btcEthLeverage, altcoinLeverage int, btcEthPosRatio, altcoinPosRatio float64) error {
+func validateDecision(d *Decision, accountEquity float64, btcEthLeverage, altcoinLeverage int, btcEthPosRatio, altcoinPosRatio float64, tradingDiscipline store.TradingDisciplineConfig, conservativeStrategy store.ConservativeStrategyConfig, ctx *Context) error {
 	validActions := map[string]bool{
 		"open_long":   true,
 		"open_short":  true,
@@ -1954,6 +2123,82 @@ func validateDecision(d *Decision, accountEquity float64, btcEthLeverage, altcoi
 			return fmt.Errorf("risk/reward ratio too low (%.2f:1), must be ≥3.0:1 [risk: %.2f%% reward: %.2f%%] [stop loss: %.2f take profit: %.2f]",
 				riskRewardRatio, riskPercent, rewardPercent, d.StopLoss, d.TakeProfit)
 		}
+
+		// === Trading Discipline: Mandatory Stop-Loss/Take-Profit ===
+		if tradingDiscipline.RequireStopLoss && d.StopLoss <= 0 {
+			return fmt.Errorf("stop_loss is required for %s positions (trading discipline)", d.Action)
+		}
+		if tradingDiscipline.RequireTakeProfit && d.TakeProfit <= 0 {
+			return fmt.Errorf("take_profit is required for %s positions (trading discipline)", d.Action)
+		}
+	}
+
+	// === Trading Discipline: Close Restrictions ===
+	// Soft validation - mark as failed but don't reject entire response
+	if (d.Action == "close_long" || d.Action == "close_short") && tradingDiscipline.EnableCloseRestrictions {
+		// Check reasoning length
+		if tradingDiscipline.CloseReasoningMinLength > 0 && len(d.Reasoning) < tradingDiscipline.CloseReasoningMinLength {
+			if d.ValidationResult == nil {
+				d.ValidationResult = &DecisionValidationResult{}
+			}
+			d.ValidationResult.Passed = false
+			d.ValidationResult.ValidationError = fmt.Sprintf("close reasoning too short (%d chars < %d required): provide detailed explanation for closing position",
+				len(d.Reasoning), tradingDiscipline.CloseReasoningMinLength)
+			logger.Infof("⚠️  [%s] Soft-validation failed: %s", d.Symbol, d.ValidationResult.ValidationError)
+			return nil // Don't fail entire parsing, just mark this decision as failed
+		}
+	}
+
+	// === Conservative Strategy: Signal Quality Scoring ===
+	// Soft validation - mark as failed but don't reject entire response
+	if (d.Action == "open_long" || d.Action == "open_short") && conservativeStrategy.EnableSignalScoring && ctx != nil {
+		score := CalculateSignalScore(ctx, d, &conservativeStrategy)
+
+		// Initialize ValidationResult if not already set
+		if d.ValidationResult == nil {
+			d.ValidationResult = &DecisionValidationResult{}
+		}
+		d.ValidationResult.SignalScore = score
+
+		if score.Total < conservativeStrategy.MinSignalScore {
+			d.ValidationResult.Passed = false
+			d.ValidationResult.ValidationError = fmt.Sprintf("signal score too low (%d < %d required): %s",
+				score.Total, conservativeStrategy.MinSignalScore, score.Details)
+			logger.Infof("⚠️  [%s] Soft-validation failed: %s", d.Symbol, d.ValidationResult.ValidationError)
+			return nil // Don't fail entire parsing, just mark this decision as failed
+		}
+		d.ValidationResult.Passed = true
+		logger.Infof("✓ Signal score passed: %d/100 (min: %d)", score.Total, conservativeStrategy.MinSignalScore)
+	}
+
+	// === Conservative Strategy: Trend Confirmation ===
+	// Soft validation - mark as failed but don't reject entire response
+	if (d.Action == "open_long" || d.Action == "open_short") && conservativeStrategy.EnableTrendConfirm && ctx != nil {
+		trendAnalysis := AnalyzeTrend(ctx, d.Symbol)
+
+		// Initialize ValidationResult if not already set
+		if d.ValidationResult == nil {
+			d.ValidationResult = &DecisionValidationResult{}
+		}
+		d.ValidationResult.TrendAnalysis = trendAnalysis
+
+		if err := ValidateTrendEntry(ctx, d.Symbol, d.Action, &conservativeStrategy); err != nil {
+			d.ValidationResult.Passed = false
+			d.ValidationResult.ValidationError = fmt.Sprintf("trend validation failed: %v", err)
+			logger.Infof("⚠️  [%s] Soft-validation failed: %s", d.Symbol, d.ValidationResult.ValidationError)
+			return nil // Don't fail entire parsing, just mark this decision as failed
+		}
+		if d.ValidationResult.Passed != false {
+			d.ValidationResult.Passed = true
+		}
+		logger.Infof("✓ Trend confirmation passed for %s", d.Symbol)
+	}
+
+	// Mark as passed if we reached here without errors
+	if d.ValidationResult == nil {
+		d.ValidationResult = &DecisionValidationResult{Passed: true}
+	} else if d.ValidationResult.ValidationError == "" {
+		d.ValidationResult.Passed = true
 	}
 
 	return nil
