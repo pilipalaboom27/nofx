@@ -849,48 +849,50 @@ func (s *SignalScorer) scoreVolumePriceDetailed(data *market.Data, isLong bool) 
 
 	// B. 成交量确认评分 (8分)
 	if data.TimeframeData != nil {
-		if primaryTF, ok := data.TimeframeData["5m"]; ok && len(primaryTF.Klines) >= 24 {
-			klines := primaryTF.Klines
-			var totalVol float64
-			for i := len(klines) - 24; i < len(klines); i++ {
-				totalVol += klines[i].Volume
-			}
-			avgVol := totalVol / 24
-			latestVol := klines[len(klines)-1].Volume
-
-			if avgVol > 0 {
-				result.volumeRatio = latestVol / avgVol
-				switch {
-				case result.volumeRatio > 2.0:
-					result.volumeConfirm = 8
-				case result.volumeRatio > 1.5:
-					result.volumeConfirm = 6
-				case result.volumeRatio > 1.2:
-					result.volumeConfirm = 4
-				case result.volumeRatio > 0.8:
-					result.volumeConfirm = 2
+		if primaryTF, ok := data.TimeframeData["5m"]; ok && primaryTF != nil {
+			if len(primaryTF.Klines) >= 24 {
+				klines := primaryTF.Klines
+				var totalVol float64
+				for i := len(klines) - 24; i < len(klines); i++ {
+					totalVol += klines[i].Volume
 				}
-			}
-		} else if len(primaryTF.Volume) >= 24 {
-			volumes := primaryTF.Volume
-			var totalVol float64
-			for i := len(volumes) - 24; i < len(volumes); i++ {
-				totalVol += volumes[i]
-			}
-			avgVol := totalVol / 24
-			latestVol := volumes[len(volumes)-1]
+				avgVol := totalVol / 24
+				latestVol := klines[len(klines)-1].Volume
 
-			if avgVol > 0 {
-				result.volumeRatio = latestVol / avgVol
-				switch {
-				case result.volumeRatio > 2.0:
-					result.volumeConfirm = 8
-				case result.volumeRatio > 1.5:
-					result.volumeConfirm = 6
-				case result.volumeRatio > 1.2:
-					result.volumeConfirm = 4
-				case result.volumeRatio > 0.8:
-					result.volumeConfirm = 2
+				if avgVol > 0 {
+					result.volumeRatio = latestVol / avgVol
+					switch {
+					case result.volumeRatio > 2.0:
+						result.volumeConfirm = 8
+					case result.volumeRatio > 1.5:
+						result.volumeConfirm = 6
+					case result.volumeRatio > 1.2:
+						result.volumeConfirm = 4
+					case result.volumeRatio > 0.8:
+						result.volumeConfirm = 2
+					}
+				}
+			} else if len(primaryTF.Volume) >= 24 {
+				volumes := primaryTF.Volume
+				var totalVol float64
+				for i := len(volumes) - 24; i < len(volumes); i++ {
+					totalVol += volumes[i]
+				}
+				avgVol := totalVol / 24
+				latestVol := volumes[len(volumes)-1]
+
+				if avgVol > 0 {
+					result.volumeRatio = latestVol / avgVol
+					switch {
+					case result.volumeRatio > 2.0:
+						result.volumeConfirm = 8
+					case result.volumeRatio > 1.5:
+						result.volumeConfirm = 6
+					case result.volumeRatio > 1.2:
+						result.volumeConfirm = 4
+					case result.volumeRatio > 0.8:
+						result.volumeConfirm = 2
+					}
 				}
 			}
 		}
