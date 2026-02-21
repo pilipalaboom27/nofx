@@ -806,15 +806,30 @@ func (s *SignalScorer) scoreEMATrendDetailed(data *market.Data, isLong bool) EMA
 }
 
 // scoreVolumePriceDetailed 量价配合详细评分
+// 无数据时给予基础分，避免因数据缺失导致分数过低
 func (s *SignalScorer) scoreVolumePriceDetailed(data *market.Data, isLong bool) VolumePriceResult {
 	result := VolumePriceResult{}
 
 	if data == nil {
+		// 无数据时给基础分: OI 4分 + Volume 2分 = 6分
+		result.oiChange = 4
+		result.volumeConfirm = 2
+		result.total = 6
 		return result
 	}
 
+	hasOIData := data.OpenInterest != nil && data.OpenInterest.Average > 0
+	hasVolumeData := false
+
+	// 检查是否有成交量数据
+	if data.TimeframeData != nil {
+		if primaryTF, ok := data.TimeframeData["5m"]; ok && primaryTF != nil {
+			hasVolumeData = len(primaryTF.Klines) >= 24 || len(primaryTF.Volume) >= 24
+		}
+	}
+
 	// A. OI变化评分 (12分)
-	if data.OpenInterest != nil && data.OpenInterest.Average > 0 {
+	if hasOIData {
 		priceChange := data.PriceChange1h
 		result.oiChangePct = (data.OpenInterest.Latest - data.OpenInterest.Average) / data.OpenInterest.Average * 100
 
@@ -830,6 +845,8 @@ func (s *SignalScorer) scoreVolumePriceDetailed(data *market.Data, isLong bool) 
 				result.oiChange = 4
 			case priceChange > 1:
 				result.oiChange = 2
+			default:
+				result.oiChange = 2 // 最低给2分
 			}
 		} else {
 			switch {
@@ -843,12 +860,17 @@ func (s *SignalScorer) scoreVolumePriceDetailed(data *market.Data, isLong bool) 
 				result.oiChange = 4
 			case priceChange < -1:
 				result.oiChange = 2
+			default:
+				result.oiChange = 2 // 最低给2分
 			}
 		}
+	} else {
+		// 无OI数据时给基础分 4分
+		result.oiChange = 4
 	}
 
 	// B. 成交量确认评分 (8分)
-	if data.TimeframeData != nil {
+	if hasVolumeData {
 		if primaryTF, ok := data.TimeframeData["5m"]; ok && primaryTF != nil {
 			if len(primaryTF.Klines) >= 24 {
 				klines := primaryTF.Klines
@@ -870,6 +892,8 @@ func (s *SignalScorer) scoreVolumePriceDetailed(data *market.Data, isLong bool) 
 						result.volumeConfirm = 4
 					case result.volumeRatio > 0.8:
 						result.volumeConfirm = 2
+					default:
+						result.volumeConfirm = 1 // 最低给1分
 					}
 				}
 			} else if len(primaryTF.Volume) >= 24 {
@@ -892,10 +916,15 @@ func (s *SignalScorer) scoreVolumePriceDetailed(data *market.Data, isLong bool) 
 						result.volumeConfirm = 4
 					case result.volumeRatio > 0.8:
 						result.volumeConfirm = 2
+					default:
+						result.volumeConfirm = 1 // 最低给1分
 					}
 				}
 			}
 		}
+	} else {
+		// 无成交量数据时给基础分 2分
+		result.volumeConfirm = 2
 	}
 
 	result.total = result.oiChange + result.volumeConfirm
@@ -903,10 +932,16 @@ func (s *SignalScorer) scoreVolumePriceDetailed(data *market.Data, isLong bool) 
 }
 
 // scoreMultiTimeframeDetailed 多周期共振详细评分
+// 无数据时给予基础分，避免因数据缺失导致分数过低
 func (s *SignalScorer) scoreMultiTimeframeDetailed(tfData map[string]*market.TimeframeSeriesData, isLong bool) MultiTFResult {
 	result := MultiTFResult{}
 
 	if tfData == nil || len(tfData) == 0 {
+		// 无数据时给基础分: 趋势一致性 8分 + 关键位置 3分 = 11分
+		result.trendConsist = 8
+		result.keyPosition = 3
+		result.trendDirection = "unknown"
+		result.total = 11
 		return result
 	}
 
@@ -953,7 +988,10 @@ func (s *SignalScorer) scoreMultiTimeframeDetailed(tfData map[string]*market.Tim
 
 	totalTF := len(trends)
 	if totalTF == 0 {
-		return result
+		// 无有效趋势数据时给基础分
+		result.trendConsist = 8
+		result.trendDirection = "unknown"
+		// 继续尝试获取关键位置，最后再加基础分
 	}
 
 	if isLong {
@@ -1060,6 +1098,11 @@ func (s *SignalScorer) scoreMultiTimeframeDetailed(tfData map[string]*market.Tim
 				break
 			}
 		}
+	}
+
+	// 如果关键位置得分为0，给基础分
+	if result.keyPosition == 0 {
+		result.keyPosition = 3
 	}
 
 	result.total = result.trendConsist + result.keyPosition
