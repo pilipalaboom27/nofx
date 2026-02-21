@@ -10,14 +10,21 @@ import (
 )
 
 // ============================================================================
-// Signal Scorer - 信号质量评分器
+// Signal Scorer - 信号质量评分器 (v2.0 改进版)
 // ============================================================================
 // 对交易信号进行综合评分，只接受高质量信号
-// 评分维度：
+//
+// 评分维度 (总分100分):
 // - RSI位置 (25分): 超卖区做多/超买区做空得分高
-// - EMA趋势 (25分): 顺势交易得分高
-// - 量价配合 (20分): OI与价格同向变化得分高
-// - 多周期共振 (30分): 15M/1H/4H趋势一致得分高
+// - EMA趋势 (25分): 位置8分 + 斜率8分 + 排列9分
+// - 量价配合 (20分): OI变化12分 + 成交量确认8分 (无数据=0分)
+// - 多周期共振 (30分): 趋势一致性20分 + 关键位置10分 (无数据=0分)
+//
+// 改进点:
+// 1. 无数据时不再给"同情分"，严格0分
+// 2. EMA评分拆分为位置、斜率、排列三部分
+// 3. 量价评分拆分为OI变化和成交量确认
+// 4. 多周期评分拆分为趋势一致性和关键位置
 // ============================================================================
 
 // SignalScorer 信号评分器
@@ -25,12 +32,12 @@ type SignalScorer struct{}
 
 // SignalScore 信号评分结果
 type SignalScore struct {
-	Total          int    `json:"total"`           // 总分 (0-100)
-	RSIScore       int    `json:"rsi_score"`       // RSI得分 (0-25)
-	EMAScore       int    `json:"ema_score"`       // EMA趋势得分 (0-25)
-	VolumePriceScore int  `json:"volume_price_score"` // 量价配合得分 (0-20)
-	MultiTFScore   int    `json:"multi_tf_score"`  // 多周期共振得分 (0-30)
-	Details        string `json:"details"`        // 评分详情
+	Total            int    `json:"total"`             // 总分 (0-100)
+	RSIScore         int    `json:"rsi_score"`         // RSI得分 (0-25)
+	EMAScore         int    `json:"ema_score"`         // EMA趋势得分 (0-25)
+	VolumePriceScore int    `json:"volume_price_score"` // 量价配合得分 (0-20)
+	MultiTFScore     int    `json:"multi_tf_score"`    // 多周期共振得分 (0-30)
+	Details          string `json:"details"`           // 评分详情
 }
 
 // NewSignalScorer 创建信号评分器
@@ -59,13 +66,13 @@ func (s *SignalScorer) Score(
 	// 1. RSI位置评分 (25分)
 	score.RSIScore = s.scoreRSI(marketData.CurrentRSI7, isLong)
 
-	// 2. EMA趋势评分 (25分)
+	// 2. EMA趋势评分 (25分) - 位置8分 + 斜率8分 + 排列9分
 	score.EMAScore = s.scoreEMATrend(marketData, isLong)
 
-	// 3. 量价配合评分 (20分)
+	// 3. 量价配合评分 (20分) - OI变化12分 + 成交量确认8分
 	score.VolumePriceScore = s.scoreVolumePrice(marketData, isLong)
 
-	// 4. 多周期共振评分 (30分)
+	// 4. 多周期共振评分 (30分) - 趋势一致性20分 + 关键位置10分
 	score.MultiTFScore = s.scoreMultiTimeframe(multiTFData, isLong)
 
 	// 计算总分
@@ -77,29 +84,31 @@ func (s *SignalScorer) Score(
 	return score
 }
 
-// scoreRSI RSI位置评分 (最高25分)
+// ============================================================================
+// RSI位置评分 (最高25分)
+// ============================================================================
 // 做多：RSI越低越好（超卖区买入更安全）
 // 做空：RSI越高越好（超买区卖出更安全）
 func (s *SignalScorer) scoreRSI(rsi float64, isLong bool) int {
 	if rsi == 0 {
-		return 0
+		return 0 // 无数据
 	}
 
 	if isLong {
 		// 做多：RSI越低越好
 		switch {
 		case rsi < 25:
-			return 25 // 极度超卖
+			return 25 // 极度超卖，完美入场点
 		case rsi < 30:
 			return 22 // 超卖区
 		case rsi < 40:
-			return 18 // 偏低
+			return 16 // 偏低
 		case rsi < 50:
-			return 12 // 中性偏弱
+			return 10 // 中性偏弱
 		case rsi < 60:
-			return 8  // 中性偏强
+			return 6  // 中性偏强
 		case rsi < 70:
-			return 4  // 偏高
+			return 3  // 偏高，追高风险
 		default:
 			return 0  // 超买区，不适合做多
 		}
@@ -107,144 +116,319 @@ func (s *SignalScorer) scoreRSI(rsi float64, isLong bool) int {
 		// 做空：RSI越高越好
 		switch {
 		case rsi > 75:
-			return 25 // 极度超买
+			return 25 // 极度超买，完美入场点
 		case rsi > 70:
 			return 22 // 超买区
 		case rsi > 60:
-			return 18 // 偏高
+			return 16 // 偏高
 		case rsi > 50:
-			return 12 // 中性偏强
+			return 10 // 中性偏强
 		case rsi > 40:
-			return 8  // 中性偏弱
+			return 6  // 中性偏弱
 		case rsi > 30:
-			return 4  // 偏低
+			return 3  // 偏低，追空风险
 		default:
 			return 0  // 超卖区，不适合做空
 		}
 	}
 }
 
-// scoreEMATrend EMA趋势评分 (最高25分)
-// 做多：价格在EMA20上方且EMA呈多头排列得分高
-// 做空：价格在EMA20下方且EMA呈空头排列得分高
+// ============================================================================
+// EMA趋势评分 (最高25分)
+// ============================================================================
+// 拆分为三部分：
+// A. 价格位置 (8分): 价格相对于EMA20的位置和偏离程度
+// B. EMA斜率 (8分): EMA20的倾斜方向和角度
+// C. EMA排列 (9分): EMA20/50/100的排列状态
 func (s *SignalScorer) scoreEMATrend(data *market.Data, isLong bool) int {
 	if data == nil || data.CurrentEMA20 == 0 {
 		return 0
 	}
 
-	score := 0
+	totalScore := 0
 	price := data.CurrentPrice
 	ema20 := data.CurrentEMA20
 
-	// 价格相对于EMA20的位置 (10分)
+	// ========== A. 价格位置评分 (8分) ==========
+	positionScore := 0
 	if isLong {
 		if price > ema20 {
 			deviationPct := (price - ema20) / ema20 * 100
-			if deviationPct < 3 {
-				score += 10 // 价格刚站上EMA20
-			} else if deviationPct < 5 {
-				score += 7  // 价格适度高于EMA20
-			} else {
-				score += 3  // 价格偏离过大，可能追高
+			switch {
+			case deviationPct < 1:
+				positionScore = 8 // 刚站上EMA20，最佳入场
+			case deviationPct < 2:
+				positionScore = 6 // 适度高于EMA20
+			case deviationPct < 4:
+				positionScore = 4 // 略有偏离
+			case deviationPct < 6:
+				positionScore = 2 // 偏离较大，追高风险
+			default:
+				positionScore = 0 // 严重偏离，不适合入场
 			}
 		}
 	} else {
 		if price < ema20 {
 			deviationPct := (ema20 - price) / ema20 * 100
-			if deviationPct < 3 {
-				score += 10 // 价格刚跌破EMA20
-			} else if deviationPct < 5 {
-				score += 7  // 价格适度低于EMA20
-			} else {
-				score += 3  // 价格偏离过大，可能追空
+			switch {
+			case deviationPct < 1:
+				positionScore = 8 // 刚跌破EMA20，最佳入场
+			case deviationPct < 2:
+				positionScore = 6 // 适度低于EMA20
+			case deviationPct < 4:
+				positionScore = 4 // 略有偏离
+			case deviationPct < 6:
+				positionScore = 2 // 偏离较大，追空风险
+			default:
+				positionScore = 0 // 严重偏离，不适合入场
 			}
 		}
 	}
+	totalScore += positionScore
 
-	// 检查EMA序列（如果有多时间框架数据）
+	// ========== B. EMA斜率评分 (8分) ==========
+	slopeScore := 0
+	if data.TimeframeData != nil {
+		if primaryTF, ok := data.TimeframeData["5m"]; ok && len(primaryTF.EMA20Values) >= 3 {
+			ema20Last := primaryTF.EMA20Values[len(primaryTF.EMA20Values)-1]
+			ema20Prev := primaryTF.EMA20Values[len(primaryTF.EMA20Values)-2]
+			ema20Prev2 := primaryTF.EMA20Values[len(primaryTF.EMA20Values)-3]
+
+			// 计算斜率 (百分比变化)
+			slope1 := (ema20Last - ema20Prev) / ema20Prev * 100
+			slope2 := (ema20Prev - ema20Prev2) / ema20Prev2 * 100
+			avgSlope := (slope1 + slope2) / 2
+
+			if isLong {
+				// 做多：希望EMA向上倾斜
+				switch {
+				case avgSlope > 0.5:
+					slopeScore = 8 // 强势上涨斜率
+				case avgSlope > 0.2:
+					slopeScore = 6 // 中等上涨斜率
+				case avgSlope > 0:
+					slopeScore = 4 // 温和上涨
+				case avgSlope > -0.1:
+					slopeScore = 2 // 走平
+				default:
+					slopeScore = 0 // 下跌斜率
+				}
+			} else {
+				// 做空：希望EMA向下倾斜
+				switch {
+				case avgSlope < -0.5:
+					slopeScore = 8 // 强势下跌斜率
+				case avgSlope < -0.2:
+					slopeScore = 6 // 中等下跌斜率
+				case avgSlope < 0:
+					slopeScore = 4 // 温和下跌
+				case avgSlope < 0.1:
+					slopeScore = 2 // 走平
+				default:
+					slopeScore = 0 // 上涨斜率
+				}
+			}
+		}
+	}
+	totalScore += slopeScore
+
+	// ========== C. EMA排列评分 (9分) ==========
+	// 注意：TimeframeSeriesData 只有 EMA20 和 EMA50，没有 EMA100
+	// 所以排列评分调整为只使用 EMA20/50 的关系，最高7分
+	alignmentScore := 0
 	if data.TimeframeData != nil {
 		if primaryTF, ok := data.TimeframeData["5m"]; ok && len(primaryTF.EMA20Values) > 0 && len(primaryTF.EMA50Values) > 0 {
 			ema20Last := primaryTF.EMA20Values[len(primaryTF.EMA20Values)-1]
 			ema50Last := primaryTF.EMA50Values[len(primaryTF.EMA50Values)-1]
 
-			// EMA排列 (15分)
+			// 计算EMA间距比例
+			gap := (ema20Last - ema50Last) / ema50Last * 100
+
 			if isLong {
-				if ema20Last > ema50Last {
-					score += 15 // 多头排列
-				} else if ema20Last > ema50Last*0.98 {
-					score += 8  // 接近金叉
+				// 做多：希望EMA20 > EMA50 且间距适中
+				switch {
+				case gap > 0.5 && gap < 2:
+					alignmentScore = 7 // 理想多头排列 (间距适中)
+				case gap > 0:
+					alignmentScore = 5 // 多头排列 (刚形成)
+				case gap > -0.3:
+					alignmentScore = 3 // 接近金叉
+				case gap > -1:
+					alignmentScore = 1 // 略低于EMA50
 				}
 			} else {
-				if ema20Last < ema50Last {
-					score += 15 // 空头排列
-				} else if ema20Last < ema50Last*1.02 {
-					score += 8  // 接近死叉
+				// 做空：希望EMA20 < EMA50 且间距适中
+				switch {
+				case gap < -0.5 && gap > -2:
+					alignmentScore = 7 // 理想空头排列 (间距适中)
+				case gap < 0:
+					alignmentScore = 5 // 空头排列 (刚形成)
+				case gap < 0.3:
+					alignmentScore = 3 // 接近死叉
+				case gap < 1:
+					alignmentScore = 1 // 略高于EMA50
 				}
 			}
 		}
 	}
+	totalScore += alignmentScore
 
-	return score
+	return totalScore
 }
 
-// scoreVolumePrice 量价配合评分 (最高20分)
-// OI增加+价格上涨 = 强多头
-// OI增加+价格下跌 = 强空头
+// ============================================================================
+// 量价配合评分 (最高20分)
+// ============================================================================
+// 拆分为两部分：
+// A. OI变化 + 价格方向 (12分): OI增加且价格同向得分高
+// B. 成交量确认 (8分): 成交量放大确认趋势有效性
+//
+// 注意：无数据时给0分，不给"同情分"
 func (s *SignalScorer) scoreVolumePrice(data *market.Data, isLong bool) int {
-	if data == nil || data.OpenInterest == nil {
-		return 10 // 无数据时给中等分数
+	if data == nil {
+		return 0
 	}
 
-	score := 0
+	totalScore := 0
 
-	// 价格变化
-	priceChange := data.PriceChange1h
+	// ========== A. OI变化评分 (12分) ==========
+	oiScore := 0
+	if data.OpenInterest != nil && data.OpenInterest.Average > 0 {
+		priceChange := data.PriceChange1h
+		oiChange := (data.OpenInterest.Latest - data.OpenInterest.Average) / data.OpenInterest.Average * 100
 
-	// OI变化（使用Latest相对于Average的变化估算）
-	var oiChange float64
-	if data.OpenInterest.Average > 0 {
-		oiChange = (data.OpenInterest.Latest - data.OpenInterest.Average) / data.OpenInterest.Average * 100
-	}
-
-	// 量价配合判断
-	if isLong {
-		// 做多：希望看到OI增加+价格上涨
-		if oiChange > 0 && priceChange > 0 {
-			score = 20 // 完美配合：资金流入+价格上涨
-		} else if oiChange > 0 && priceChange > -1 {
-			score = 15 // OI增加，价格稳定
-		} else if priceChange > 2 {
-			score = 10 // 价格上涨但OI未增加（可能是空头平仓）
+		if isLong {
+			// 做多：希望看到OI增加+价格上涨 (新资金入场推高价格)
+			switch {
+			case oiChange > 3 && priceChange > 1:
+				oiScore = 12 // 完美配合：资金大量流入+价格上涨
+			case oiChange > 1 && priceChange > 0.5:
+				oiScore = 9 // 良好配合
+			case oiChange > 0 && priceChange > 0:
+				oiScore = 6 // 一般配合
+			case oiChange > 0 && priceChange > -0.5:
+				oiScore = 4 // OI增加但价格未动
+			case priceChange > 1:
+				oiScore = 2 // 价格上涨但OI未增加 (可能是空头平仓)
+			default:
+				oiScore = 0 // 量价背离
+			}
 		} else {
-			score = 5  // 量价不配合
-		}
-	} else {
-		// 做空：希望看到OI增加+价格下跌
-		if oiChange > 0 && priceChange < 0 {
-			score = 20 // 完美配合：资金流入+价格下跌
-		} else if oiChange > 0 && priceChange < 1 {
-			score = 15 // OI增加，价格稳定
-		} else if priceChange < -2 {
-			score = 10 // 价格下跌但OI未增加（可能是多头平仓）
-		} else {
-			score = 5  // 量价不配合
+			// 做空：希望看到OI增加+价格下跌 (新资金入场推低价格)
+			switch {
+			case oiChange > 3 && priceChange < -1:
+				oiScore = 12 // 完美配合：资金大量流入+价格下跌
+			case oiChange > 1 && priceChange < -0.5:
+				oiScore = 9 // 良好配合
+			case oiChange > 0 && priceChange < 0:
+				oiScore = 6 // 一般配合
+			case oiChange > 0 && priceChange < 0.5:
+				oiScore = 4 // OI增加但价格未动
+			case priceChange < -1:
+				oiScore = 2 // 价格下跌但OI未增加 (可能是多头平仓)
+			default:
+				oiScore = 0 // 量价背离
+			}
 		}
 	}
+	// 无OI数据时，oiScore保持为0
+	totalScore += oiScore
 
-	return score
+	// ========== B. 成交量确认评分 (8分) ==========
+	volumeScore := 0
+
+	// 尝试从TimeframeData获取成交量数据
+	if data.TimeframeData != nil {
+		if primaryTF, ok := data.TimeframeData["5m"]; ok && len(primaryTF.Klines) >= 24 {
+			klines := primaryTF.Klines
+
+			// 计算最近24根K线的平均成交量
+			var totalVol float64
+			for i := len(klines) - 24; i < len(klines); i++ {
+				totalVol += klines[i].Volume
+			}
+			avgVol := totalVol / 24
+
+			// 最新K线的成交量
+			latestVol := klines[len(klines)-1].Volume
+
+			if avgVol > 0 {
+				volRatio := latestVol / avgVol
+
+				switch {
+				case volRatio > 2.0:
+					volumeScore = 8 // 成交量爆发 (>2倍均量)
+				case volRatio > 1.5:
+					volumeScore = 6 // 成交量明显放大
+				case volRatio > 1.2:
+					volumeScore = 4 // 成交量略高于平均
+				case volRatio > 0.8:
+					volumeScore = 2 // 成交量正常
+				default:
+					volumeScore = 0 // 成交量萎缩
+				}
+			}
+		} else if len(primaryTF.Volume) >= 24 {
+			// 使用旧的Volume字段
+			volumes := primaryTF.Volume
+			var totalVol float64
+			for i := len(volumes) - 24; i < len(volumes); i++ {
+				totalVol += volumes[i]
+			}
+			avgVol := totalVol / 24
+			latestVol := volumes[len(volumes)-1]
+
+			if avgVol > 0 {
+				volRatio := latestVol / avgVol
+
+				switch {
+				case volRatio > 2.0:
+					volumeScore = 8
+				case volRatio > 1.5:
+					volumeScore = 6
+				case volRatio > 1.2:
+					volumeScore = 4
+				case volRatio > 0.8:
+					volumeScore = 2
+				default:
+					volumeScore = 0
+				}
+			}
+		}
+	}
+	// 无成交量数据时，volumeScore保持为0
+	totalScore += volumeScore
+
+	return totalScore
 }
 
-// scoreMultiTimeframe 多周期共振评分 (最高30分)
-// 检查15M/1H/4H趋势是否一致
+// ============================================================================
+// 多周期共振评分 (最高30分)
+// ============================================================================
+// 拆分为两部分：
+// A. 趋势一致性 (20分): 15m/1h/4h趋势方向一致程度
+// B. 关键位置确认 (10分): 更大周期在关键支撑/阻力位
+//
+// 注意：无数据时给0分，不给"同情分"
 func (s *SignalScorer) scoreMultiTimeframe(tfData map[string]*market.TimeframeSeriesData, isLong bool) int {
 	if tfData == nil || len(tfData) == 0 {
-		return 15 // 无数据时给中等分数
+		return 0 // 无数据，0分
 	}
 
+	totalScore := 0
+
+	// ========== A. 趋势一致性评分 (20分) ==========
 	// 分析各时间框架趋势
 	trends := make(map[string]string) // "up", "down", "sideways"
 
-	for tf, data := range tfData {
+	// 优先检查关键时间框架：15m, 1h, 4h
+	keyTimeframes := []string{"15m", "1h", "4h", "5m"}
+
+	for _, tf := range keyTimeframes {
+		data, ok := tfData[tf]
+		if !ok {
+			continue
+		}
 		if len(data.EMA20Values) < 2 || len(data.EMA50Values) < 2 {
 			continue
 		}
@@ -255,9 +439,11 @@ func (s *SignalScorer) scoreMultiTimeframe(tfData map[string]*market.TimeframeSe
 		ema50Last := data.EMA50Values[len(data.EMA50Values)-1]
 
 		// 判断趋势
-		if ema20Last > ema50Last && ema20Last > ema20Prev {
+		emaSlope := (ema20Last - ema20Prev) / ema20Prev * 100
+
+		if ema20Last > ema50Last && emaSlope > 0.05 {
 			trends[tf] = "up"
-		} else if ema20Last < ema50Last && ema20Last < ema20Prev {
+		} else if ema20Last < ema50Last && emaSlope < -0.05 {
 			trends[tf] = "down"
 		} else {
 			trends[tf] = "sideways"
@@ -267,51 +453,150 @@ func (s *SignalScorer) scoreMultiTimeframe(tfData map[string]*market.TimeframeSe
 	// 计算共振程度
 	upCount := 0
 	downCount := 0
+	sidewaysCount := 0
 
 	for _, trend := range trends {
-		if trend == "up" {
+		switch trend {
+		case "up":
 			upCount++
-		} else if trend == "down" {
+		case "down":
 			downCount++
+		default:
+			sidewaysCount++
 		}
 	}
 
 	totalTF := len(trends)
 	if totalTF == 0 {
-		return 15
+		return 0 // 无有效数据
 	}
 
-	score := 0
+	consistencyScore := 0
 
 	if isLong {
 		// 做多：希望多个时间框架显示上涨趋势
-		if upCount == totalTF {
-			score = 30 // 完美共振
-		} else if upCount >= totalTF-1 {
-			score = 25 // 几乎一致
-		} else if upCount >= totalTF/2 {
-			score = 18 // 多数一致
-		} else if upCount > 0 {
-			score = 10 // 少数一致
-		} else {
-			score = 0  // 完全逆向
+		switch {
+		case upCount == totalTF:
+			consistencyScore = 20 // 完美共振
+		case upCount == totalTF-1 && sidewaysCount == 1:
+			consistencyScore = 16 // 几乎一致 (1个横盘)
+		case upCount >= totalTF/2+1:
+			consistencyScore = 12 // 多数一致
+		case upCount > 0 && downCount == 0:
+			consistencyScore = 6 // 少数一致但无冲突
+		case upCount > 0:
+			consistencyScore = 3 // 有冲突
+		default:
+			consistencyScore = 0 // 完全逆向
 		}
 	} else {
 		// 做空：希望多个时间框架显示下跌趋势
-		if downCount == totalTF {
-			score = 30 // 完美共振
-		} else if downCount >= totalTF-1 {
-			score = 25 // 几乎一致
-		} else if downCount >= totalTF/2 {
-			score = 18 // 多数一致
-		} else if downCount > 0 {
-			score = 10 // 少数一致
-		} else {
-			score = 0  // 完全逆向
+		switch {
+		case downCount == totalTF:
+			consistencyScore = 20 // 完美共振
+		case downCount == totalTF-1 && sidewaysCount == 1:
+			consistencyScore = 16 // 几乎一致 (1个横盘)
+		case downCount >= totalTF/2+1:
+			consistencyScore = 12 // 多数一致
+		case downCount > 0 && upCount == 0:
+			consistencyScore = 6 // 少数一致但无冲突
+		case downCount > 0:
+			consistencyScore = 3 // 有冲突
+		default:
+			consistencyScore = 0 // 完全逆向
 		}
 	}
+	totalScore += consistencyScore
 
-	return score
+	// ========== B. 关键位置确认评分 (10分) ==========
+	// 检查更大周期是否在关键位置
+	keyPositionScore := 0
+
+	// 检查1h和4h是否在布林带位置
+	for _, tf := range []string{"1h", "4h"} {
+		data, ok := tfData[tf]
+		if !ok || len(data.Klines) < 2 {
+			continue
+		}
+
+		// 获取最新K线
+		latestKline := data.Klines[len(data.Klines)-1]
+
+		// 检查布林带数据
+		if len(data.BOLLUpper) > 0 && len(data.BOLLLower) > 0 && len(data.BOLLMiddle) > 0 {
+			upper := data.BOLLUpper[len(data.BOLLUpper)-1]
+			lower := data.BOLLLower[len(data.BOLLLower)-1]
+			close := latestKline.Close
+
+			// 计算价格在布林带中的位置
+			bandWidth := upper - lower
+			if bandWidth > 0 {
+				position := (close - lower) / bandWidth // 0=下轨, 1=上轨
+
+				if isLong {
+					// 做多：希望在下半部分 (接近支撑)
+					if position < 0.3 {
+						keyPositionScore = 10 // 接近下轨支撑
+					} else if position < 0.5 {
+						keyPositionScore = 6 // 中下位置
+					} else if position < 0.7 {
+						keyPositionScore = 3 // 中上位置
+					}
+					// position > 0.7 接近上轨，不适合做多
+				} else {
+					// 做空：希望在上半部分 (接近阻力)
+					if position > 0.7 {
+						keyPositionScore = 10 // 接近上轨阻力
+					} else if position > 0.5 {
+						keyPositionScore = 6 // 中上位置
+					} else if position > 0.3 {
+						keyPositionScore = 3 // 中下位置
+					}
+					// position < 0.3 接近下轨，不适合做空
+				}
+
+				if keyPositionScore > 0 {
+					break // 找到一个关键位置确认即可
+				}
+			}
+		}
+
+		// 检查EMA支撑/阻力
+		if len(data.EMA20Values) > 0 && len(data.EMA50Values) > 0 {
+			ema20 := data.EMA20Values[len(data.EMA20Values)-1]
+			ema50 := data.EMA50Values[len(data.EMA50Values)-1]
+			close := latestKline.Close
+
+			if isLong {
+				// 做多：价格接近EMA支撑
+				ema20Dist := (close - ema20) / ema20 * 100
+				ema50Dist := (close - ema50) / ema50 * 100
+
+				if ema20Dist < 0.5 && ema20Dist > -0.5 {
+					keyPositionScore = 8 // 刚好在EMA20附近
+				} else if ema50Dist < 1 && ema50Dist > -1 {
+					keyPositionScore = 6 // 接近EMA50支撑
+				}
+			} else {
+				// 做空：价格接近EMA阻力
+				ema20Dist := (close - ema20) / ema20 * 100
+				ema50Dist := (close - ema50) / ema50 * 100
+
+				if ema20Dist < 0.5 && ema20Dist > -0.5 {
+					keyPositionScore = 8 // 刚好在EMA20附近
+				} else if ema50Dist < 1 && ema50Dist > -1 && close < ema50 {
+					keyPositionScore = 6 // 接近EMA50阻力
+				}
+			}
+
+			if keyPositionScore > 0 {
+				break
+			}
+		}
+	}
+	totalScore += keyPositionScore
+
+	return totalScore
 }
 
 // generateDetails 生成评分详情
@@ -325,9 +610,9 @@ func (s *SignalScorer) generateDetails(score *SignalScore, rsi float64, isLong b
 
 	details.WriteString(fmt.Sprintf("【%s信号评分】总分: %d/100\n", direction, score.Total))
 	details.WriteString(fmt.Sprintf("• RSI位置: %d/25 (当前RSI: %.1f)\n", score.RSIScore, rsi))
-	details.WriteString(fmt.Sprintf("• EMA趋势: %d/25\n", score.EMAScore))
-	details.WriteString(fmt.Sprintf("• 量价配合: %d/20\n", score.VolumePriceScore))
-	details.WriteString(fmt.Sprintf("• 多周期共振: %d/30\n", score.MultiTFScore))
+	details.WriteString(fmt.Sprintf("• EMA趋势: %d/25 (位置+斜率+排列)\n", score.EMAScore))
+	details.WriteString(fmt.Sprintf("• 量价配合: %d/20 (OI变化+成交量)\n", score.VolumePriceScore))
+	details.WriteString(fmt.Sprintf("• 多周期共振: %d/30 (一致性+关键位置)\n", score.MultiTFScore))
 
 	// 添加评价
 	if score.Total >= 80 {
@@ -371,14 +656,11 @@ func CalculateSignalScore(
 	}
 
 	// 获取多时间框架数据
-	// MultiTFMarket[symbol] 是 map[string]*market.Data (timeframe -> Data)
-	// 每个market.Data有TimeframeData字段
 	var tfData map[string]*market.TimeframeSeriesData
 	if multiTFData != nil {
 		tfData = make(map[string]*market.TimeframeSeriesData)
 		for tf, data := range multiTFData {
 			if data.TimeframeData != nil {
-				// 提取该时间框架的数据
 				if tfSeries, ok := data.TimeframeData[tf]; ok {
 					tfData[tf] = tfSeries
 				}
