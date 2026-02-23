@@ -51,13 +51,13 @@ export function ConservativeStrategyEditor({
 
       // Trailing Stop
       trailingStop: { zh: '移动止损', en: 'Trailing Stop' },
-      trailingStopDesc: { zh: '盈利后自动移动止损，锁定利润', en: 'Automatically move stop-loss when profitable to lock gains' },
+      trailingStopDesc: { zh: '盈利达到阈值后追踪最高点，回撤时触发止损，锁定利润', en: 'Track peak price after profit threshold, trigger stop on drawdown to lock gains' },
       enableTrailingStop: { zh: '启用移动止损', en: 'Enable Trailing Stop' },
-      trailAfterProfitPct: { zh: '触发盈利阈值', en: 'Trigger Profit Threshold' },
-      trailAfterProfitTip: { zh: '盈利超过此百分比时开始移动止损', en: 'Start trailing when profit exceeds this percentage' },
-      trailToBreakevenAt: { zh: '移至成本价点', en: 'Move to Breakeven At' },
-      trailToBreakevenTip: { zh: '盈利超过此百分比时止损移至成本价', en: 'Move stop to breakeven when profit exceeds this percentage' },
-      trailingExample: { zh: '示例：盈利3%时止损移至+1.5%，盈利5%时移至成本价', en: 'Example: At 3% profit, stop moves to +1.5%; at 5%, moves to breakeven' },
+      trailTriggerPct: { zh: '触发追踪阈值', en: 'Trigger Threshold' },
+      trailTriggerTip: { zh: '盈利达到此%时开始追踪最高点', en: 'Start tracking peak when profit reaches this %' },
+      trailDrawdownPct: { zh: '回撤止损%', en: 'Drawdown Stop %' },
+      trailDrawdownTip: { zh: '从最高点回撤此%时触发止损', en: 'Trigger stop when price retreats this % from peak' },
+      trailingExample: { zh: '示例：盈利5%触发追踪，回撤3%止损 → 盈利10%后回撤到6.7%止损', en: 'Example: 5% triggers tracking, 3% drawdown stops → At 10% peak, stops at 6.7%' },
 
       // General
       codeEnforced: { zh: '代码强制执行', en: 'CODE ENFORCED' },
@@ -78,8 +78,8 @@ export function ConservativeStrategyEditor({
     enable_trend_confirm: false,
     require_multi_timeframe: true,
     enable_trailing_stop: false,
-    trail_after_profit_pct: 2,
-    trail_to_breakeven_at: 5,
+    trail_trigger_pct: 5,
+    trail_drawdown_pct: 3,
   }
 
   const updateField = <K extends keyof ConservativeStrategyConfig>(
@@ -301,35 +301,12 @@ export function ConservativeStrategyEditor({
 
           <div className="grid grid-cols-2 gap-4">
             <div>
-              <label className="text-xs block mb-1.5" style={{ color: '#EAECEF' }}>{t('trailAfterProfitPct')}</label>
+              <label className="text-xs block mb-1.5" style={{ color: '#EAECEF' }}>{t('trailTriggerPct')}</label>
               <div className="flex items-center gap-2">
                 <input
                   type="number"
-                  value={conservative.trail_after_profit_pct}
-                  onChange={(e) => updateField('trail_after_profit_pct', parseFloat(e.target.value) || 2)}
-                  disabled={disabled || !conservative.enable_trailing_stop}
-                  min={0.5}
-                  max={10}
-                  step={0.5}
-                  className="w-20 px-3 py-2 rounded-lg text-sm"
-                  style={{
-                    background: '#1E2329',
-                    border: '1px solid #2B3139',
-                    color: '#EAECEF',
-                    opacity: conservative.enable_trailing_stop ? 1 : 0.5,
-                  }}
-                />
-                <span className="text-xs" style={{ color: '#848E9C' }}>{t('percent')}</span>
-              </div>
-              <p className="text-[10px] mt-1" style={{ color: '#848E9C' }}>{t('trailAfterProfitTip')}</p>
-            </div>
-            <div>
-              <label className="text-xs block mb-1.5" style={{ color: '#EAECEF' }}>{t('trailToBreakevenAt')}</label>
-              <div className="flex items-center gap-2">
-                <input
-                  type="number"
-                  value={conservative.trail_to_breakeven_at}
-                  onChange={(e) => updateField('trail_to_breakeven_at', parseFloat(e.target.value) || 5)}
+                  value={conservative.trail_trigger_pct}
+                  onChange={(e) => updateField('trail_trigger_pct', parseFloat(e.target.value) || 5)}
                   disabled={disabled || !conservative.enable_trailing_stop}
                   min={1}
                   max={20}
@@ -344,7 +321,30 @@ export function ConservativeStrategyEditor({
                 />
                 <span className="text-xs" style={{ color: '#848E9C' }}>{t('percent')}</span>
               </div>
-              <p className="text-[10px] mt-1" style={{ color: '#848E9C' }}>{t('trailToBreakevenTip')}</p>
+              <p className="text-[10px] mt-1" style={{ color: '#848E9C' }}>{t('trailTriggerTip')}</p>
+            </div>
+            <div>
+              <label className="text-xs block mb-1.5" style={{ color: '#EAECEF' }}>{t('trailDrawdownPct')}</label>
+              <div className="flex items-center gap-2">
+                <input
+                  type="number"
+                  value={conservative.trail_drawdown_pct}
+                  onChange={(e) => updateField('trail_drawdown_pct', parseFloat(e.target.value) || 3)}
+                  disabled={disabled || !conservative.enable_trailing_stop}
+                  min={0.5}
+                  max={10}
+                  step={0.5}
+                  className="w-20 px-3 py-2 rounded-lg text-sm"
+                  style={{
+                    background: '#1E2329',
+                    border: '1px solid #2B3139',
+                    color: '#EAECEF',
+                    opacity: conservative.enable_trailing_stop ? 1 : 0.5,
+                  }}
+                />
+                <span className="text-xs" style={{ color: '#848E9C' }}>{t('percent')}</span>
+              </div>
+              <p className="text-[10px] mt-1" style={{ color: '#848E9C' }}>{t('trailDrawdownTip')}</p>
             </div>
           </div>
 

@@ -2133,20 +2133,27 @@ func validateDecision(d *Decision, accountEquity float64, btcEthLeverage, altcoi
 		}
 	}
 
-	// === Trading Discipline: Close Restrictions ===
-	// Soft validation - mark as failed but don't reject entire response
-	if (d.Action == "close_long" || d.Action == "close_short") && tradingDiscipline.EnableCloseRestrictions {
-		// Check reasoning length
-		if tradingDiscipline.CloseReasoningMinLength > 0 && len(d.Reasoning) < tradingDiscipline.CloseReasoningMinLength {
-			if d.ValidationResult == nil {
-				d.ValidationResult = &DecisionValidationResult{}
-			}
-			d.ValidationResult.Passed = false
-			d.ValidationResult.ValidationError = fmt.Sprintf("close reasoning too short (%d chars < %d required): provide detailed explanation for closing position",
-				len(d.Reasoning), tradingDiscipline.CloseReasoningMinLength)
-			logger.Infof("⚠️  [%s] Soft-validation failed: %s", d.Symbol, d.ValidationResult.ValidationError)
-			return nil // Don't fail entire parsing, just mark this decision as failed
+	// === Trading Discipline: Close Signal Check ===
+	// Only allow close if signal is weak (score <= MaxSignalScoreForClose)
+	// This prevents closing positions when trend is still strong
+	if (d.Action == "close_long" || d.Action == "close_short") && tradingDiscipline.EnableCloseSignalCheck && ctx != nil {
+		score := CalculateSignalScore(ctx, d, &conservativeStrategy)
+
+		// Initialize ValidationResult if not already set
+		if d.ValidationResult == nil {
+			d.ValidationResult = &DecisionValidationResult{Passed: true}
 		}
+		d.ValidationResult.SignalScore = score
+
+		// If signal score > threshold, reject close (trend still strong)
+		if score.Total > tradingDiscipline.MaxSignalScoreForClose {
+			d.ValidationResult.Passed = false
+			d.ValidationResult.ValidationError = fmt.Sprintf("close rejected: signal still strong (%d > %d threshold), trend not weak enough to exit: %s",
+				score.Total, tradingDiscipline.MaxSignalScoreForClose, score.Details)
+			logger.Infof("⚠️  [%s] Soft-validation failed: %s", d.Symbol, d.ValidationResult.ValidationError)
+			return nil
+		}
+		logger.Infof("✓ [%s] Close signal check passed: score %d <= threshold %d", d.Symbol, score.Total, tradingDiscipline.MaxSignalScoreForClose)
 	}
 
 	// === Conservative Strategy: Signal Quality Scoring ===

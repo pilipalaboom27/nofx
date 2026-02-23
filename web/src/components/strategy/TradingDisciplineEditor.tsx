@@ -71,6 +71,8 @@ export function TradingDisciplineEditor({
     enable_close_restrictions: false,
     min_loss_pct_for_early_close: -3,
     close_reasoning_min_length: 50,
+    enable_close_signal_check: false,
+    max_signal_score_for_close: 40,
   }
 
   const updateField = <K extends keyof TradingDisciplineConfig>(

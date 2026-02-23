@@ -606,6 +606,7 @@ export function TraderDashboardPage({
                                                     <th className="px-1 pb-3 font-semibold text-nofx-text-muted whitespace-nowrap text-right hidden md:table-cell" title={t('positionValue', language)}>{language === 'zh' ? '价值' : 'Value'}</th>
                                                     <th className="px-1 pb-3 font-semibold text-nofx-text-muted whitespace-nowrap text-center hidden md:table-cell" title={t('leverage', language)}>{language === 'zh' ? '杠杆' : 'Lev.'}</th>
                                                     <th className="px-1 pb-3 font-semibold text-nofx-text-muted whitespace-nowrap text-right" title={t('unrealizedPnL', language)}>{language === 'zh' ? '未实现盈亏' : 'uPnL'}</th>
+                                                    <th className="px-1 pb-3 font-semibold text-nofx-text-muted whitespace-nowrap text-right hidden lg:table-cell" title={language === 'zh' ? '移动止损：盈利5%后激活，从峰值价回撤3%触发止损' : 'Trailing Stop: activates at 5% profit, stops on 3% price drop from peak'}>{language === 'zh' ? '移动止损' : 'Trail Stop'}</th>
                                                     <th className="px-1 pb-3 font-semibold text-nofx-text-muted whitespace-nowrap text-right hidden md:table-cell" title={t('liqPrice', language)}>{language === 'zh' ? '强平价' : 'Liq.'}</th>
                                                 </tr>
                                             </thead>
@@ -667,6 +668,27 @@ export function TraderDashboardPage({
                                                                 {pos.unrealized_pnl >= 0 ? '+' : ''}
                                                                 {pos.unrealized_pnl.toFixed(2)}
                                                             </span>
+                                                        </td>
+                                                        <td className="px-1 py-3 font-mono whitespace-nowrap text-right hidden lg:table-cell">
+                                                            {pos.trailing_stop ? (
+                                                                <div className="flex flex-col items-end gap-0.5">
+                                                                    <div className="flex items-center gap-1">
+                                                                        {pos.trailing_stop.active ? (
+                                                                            <span className="w-1.5 h-1.5 rounded-full bg-nofx-green animate-pulse" title={language === 'zh' ? '已激活：盈利达保证金×5%后追踪，回撤(保证金+盈利)×3%止损' : 'Active: triggered at margin×5% profit, stop on (margin+profit)×3% drawdown'}></span>
+                                                                        ) : (
+                                                                            <span className="w-1.5 h-1.5 rounded-full bg-nofx-text-muted" title={language === 'zh' ? '待触发：盈利达保证金×5%后激活' : 'Pending: activates at margin×5% profit'}></span>
+                                                                        )}
+                                                                        <span className="text-nofx-gold" title={language === 'zh' ? '当前止损价' : 'Current stop price'}>
+                                                                            {formatPrice(pos.trailing_stop.current_stop)}
+                                                                        </span>
+                                                                    </div>
+                                                                    <div className="text-[10px] text-nofx-text-muted" title={language === 'zh' ? '达到的最高盈利金额 (USDT)' : 'Peak profit in USDT'}>
+                                                                        {language === 'zh' ? '峰值盈利' : 'Peak'}: {pos.trailing_stop.peak_profit?.toFixed(2) ?? '0.00'} U
+                                                                    </div>
+                                                                </div>
+                                                            ) : (
+                                                                <span className="text-nofx-text-muted">-</span>
+                                                            )}
                                                         </td>
                                                         <td className="px-1 py-3 font-mono whitespace-nowrap text-right text-nofx-text-muted hidden md:table-cell">{formatPrice(pos.liquidation_price)}</td>
                                                     </tr>

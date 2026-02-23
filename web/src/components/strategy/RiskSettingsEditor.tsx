@@ -15,6 +15,8 @@ const defaultTradingDiscipline: TradingDisciplineConfig = {
   enable_close_restrictions: false,
   min_loss_pct_for_early_close: -3,
   close_reasoning_min_length: 50,
+  enable_close_signal_check: false,
+  max_signal_score_for_close: 40,
 }
 
 // Default values for conservative strategy config
@@ -27,8 +29,8 @@ const defaultConservativeStrategy: ConservativeStrategyConfig = {
   enable_trend_confirm: false,
   require_multi_timeframe: true,
   enable_trailing_stop: false,
-  trail_after_profit_pct: 2,
-  trail_to_breakeven_at: 5,
+  trail_trigger_pct: 5,
+  trail_drawdown_pct: 3,
 }
 
 interface RiskSettingsEditorProps {
@@ -96,10 +98,16 @@ export function RiskSettingsEditor({
       minLossForCloseDesc: { zh: '负数，如-3表示亏损3%以上才允许平仓', en: 'Negative, e.g., -3 means close allowed at 3%+ loss' },
       closeReasoningLength: { zh: '平仓理由最小长度', en: 'Min Close Reasoning Length' },
       enableTrailingStop: { zh: '启用移动止损', en: 'Enable Trailing Stop' },
-      trailAfterProfit: { zh: '触发盈利阈值', en: 'Trail After Profit' },
-      trailAfterProfitDesc: { zh: '盈利超过此值开始移动止损', en: 'Start trailing when profit exceeds this' },
-      trailToBreakeven: { zh: '移至成本价点', en: 'Trail to Breakeven At' },
-      trailToBreakevenDesc: { zh: '盈利超过此值止损移至成本价', en: 'Move stop to breakeven at this profit' },
+      trailTriggerPct: { zh: '触发追踪阈值', en: 'Trigger Threshold' },
+      trailTriggerDesc: { zh: '盈利达到此%时开始追踪最高点', en: 'Start tracking peak when profit reaches this %' },
+      trailDrawdownPct: { zh: '回撤止损%', en: 'Drawdown Stop %' },
+      trailDrawdownDesc: { zh: '从最高点回撤此%时触发止损', en: 'Trigger stop when price retreats this % from peak' },
+
+      // Close signal check
+      enableCloseSignalCheck: { zh: '启用平仓信号检查', en: 'Enable Close Signal Check' },
+      closeSignalCheckDesc: { zh: '仅当信号分数低于阈值时允许平仓（趋势转弱）', en: 'Only allow close when signal is weak (score <= threshold)' },
+      maxSignalScoreForClose: { zh: '允许平仓的最大信号分数', en: 'Max Signal Score for Close' },
+      maxSignalScoreForCloseDesc: { zh: '分数高于此值时拒绝平仓，表示趋势仍然强劲', en: 'Reject close if score exceeds this, trend still strong' },
 
       // Daily limits
       enableDailyLimits: { zh: '启用日频限制', en: 'Enable Daily Limits' },
@@ -550,14 +558,14 @@ export function RiskSettingsEditor({
             <div className="grid grid-cols-2 gap-4">
               <div>
                 <label className="block text-xs mb-1" style={{ color: '#848E9C' }}>
-                  {t('trailAfterProfit')} (%)
+                  {t('trailTriggerPct')} (%)
                 </label>
                 <input
                   type="number"
-                  value={conservative.trail_after_profit_pct ?? 2}
-                  onChange={(e) => updateConservative('trail_after_profit_pct', parseFloat(e.target.value) || 2)}
+                  value={conservative.trail_trigger_pct ?? 5}
+                  onChange={(e) => updateConservative('trail_trigger_pct', parseFloat(e.target.value) || 5)}
                   disabled={disabled || !conservative.enable_trailing_stop}
-                  min={0.5}
+                  min={1}
                   max={20}
                   step={0.5}
                   className="w-20 px-2 py-1 rounded text-sm"
@@ -571,15 +579,15 @@ export function RiskSettingsEditor({
               </div>
               <div>
                 <label className="block text-xs mb-1" style={{ color: '#848E9C' }}>
-                  {t('trailToBreakeven')} (%)
+                  {t('trailDrawdownPct')} (%)
                 </label>
                 <input
                   type="number"
-                  value={conservative.trail_to_breakeven_at ?? 5}
-                  onChange={(e) => updateConservative('trail_to_breakeven_at', parseFloat(e.target.value) || 5)}
+                  value={conservative.trail_drawdown_pct ?? 3}
+                  onChange={(e) => updateConservative('trail_drawdown_pct', parseFloat(e.target.value) || 3)}
                   disabled={disabled || !conservative.enable_trailing_stop}
-                  min={1}
-                  max={50}
+                  min={0.5}
+                  max={10}
                   step={0.5}
                   className="w-20 px-2 py-1 rounded text-sm"
                   style={{
@@ -590,6 +598,44 @@ export function RiskSettingsEditor({
                   }}
                 />
               </div>
+            </div>
+          </div>
+
+          {/* Close Signal Check */}
+          <div className="p-3 rounded" style={{ background: '#1E2329' }}>
+            <div className="flex items-center gap-2 mb-2">
+              <input
+                type="checkbox"
+                checked={discipline.enable_close_signal_check ?? false}
+                onChange={(e) => updateDiscipline('enable_close_signal_check', e.target.checked)}
+                disabled={disabled}
+                className="w-4 h-4 accent-green-500"
+              />
+              <span className="text-sm" style={{ color: '#EAECEF' }}>{t('enableCloseSignalCheck')}</span>
+            </div>
+            <p className="text-xs mb-2" style={{ color: '#848E9C' }}>
+              {t('closeSignalCheckDesc')}
+            </p>
+            <div className="flex items-center gap-2">
+              <label className="text-xs" style={{ color: '#848E9C' }}>
+                {t('maxSignalScoreForClose')}:
+              </label>
+              <input
+                type="number"
+                value={discipline.max_signal_score_for_close ?? 40}
+                onChange={(e) => updateDiscipline('max_signal_score_for_close', parseInt(e.target.value) || 40)}
+                disabled={disabled || !discipline.enable_close_signal_check}
+                min={0}
+                max={100}
+                className="w-20 px-2 py-1 rounded text-sm"
+                style={{
+                  background: '#0B0E11',
+                  border: '1px solid #2B3139',
+                  color: '#EAECEF',
+                  opacity: discipline.enable_close_signal_check ? 1 : 0.5,
+                }}
+              />
+              <span className="text-xs" style={{ color: '#848E9C' }}>/100</span>
             </div>
           </div>
         </div>

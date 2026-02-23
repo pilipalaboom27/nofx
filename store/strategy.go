@@ -263,6 +263,14 @@ type TradingDisciplineConfig struct {
 	MinLossPctForEarlyClose float64 `json:"min_loss_pct_for_early_close"`
 	// Min characters for close reasoning (enforce detailed explanation)
 	CloseReasoningMinLength int `json:"close_reasoning_min_length"`
+
+	// === Close Signal Check ===
+	// Enable signal check before closing (only allow close if signal is weak)
+	EnableCloseSignalCheck bool `json:"enable_close_signal_check"`
+	// Max signal score to allow close (0-100, default: 40)
+	// If current signal score > this value, close is rejected (trend still strong)
+	// If current signal score <= this value, close is allowed (trend weakening)
+	MaxSignalScoreForClose int `json:"max_signal_score_for_close"`
 }
 
 // ConservativeStrategyConfig conservative strategy configuration (CODE ENFORCED)
@@ -291,10 +299,10 @@ type ConservativeStrategyConfig struct {
 	// === Trailing Stop ===
 	// Enable trailing stop-loss
 	EnableTrailingStop bool `json:"enable_trailing_stop"`
-	// Profit percentage to trigger trailing stop (default: 2%)
-	TrailAfterProfitPct float64 `json:"trail_after_profit_pct"`
-	// Profit percentage to move stop-loss to breakeven (default: 5%)
-	TrailToBreakevenAt float64 `json:"trail_to_breakeven_at"`
+	// Profit percentage to trigger trailing stop (default: 5%)
+	TrailTriggerPct float64 `json:"trail_trigger_pct"`
+	// Drawdown percentage to trigger stop loss (default: 3%)
+	TrailDrawdownPct float64 `json:"trail_drawdown_pct"`
 }
 
 // NewStrategyStore creates a new StrategyStore
@@ -394,6 +402,8 @@ func GetDefaultStrategyConfig(lang string) StrategyConfig {
 				EnableCloseRestrictions:  false, // Disabled by default
 				MinLossPctForEarlyClose:  -3.0,  // Allow early close if loss >= 3%
 				CloseReasoningMinLength:  50,    // Min 50 chars for close reasoning
+				EnableCloseSignalCheck:   false, // Disabled by default
+				MaxSignalScoreForClose:   40,    // Only allow close if signal score <= 40
 			},
 			ConservativeStrategy: ConservativeStrategyConfig{
 				EnableDailyLimits:     false, // Disabled by default
@@ -403,9 +413,9 @@ func GetDefaultStrategyConfig(lang string) StrategyConfig {
 				MinSignalScore:        60,    // Min 60/100 score required
 				EnableTrendConfirm:    false, // Disabled by default
 				RequireMultiTimeframe: true,  // Require 15M + 1H alignment
-				EnableTrailingStop:    false, // Disabled by default
-				TrailAfterProfitPct:   2.0,   // Start trailing at 2% profit
-				TrailToBreakevenAt:    5.0,   // Move to breakeven at 5% profit
+				EnableTrailingStop:  false, // Disabled by default
+				TrailTriggerPct:     5.0,   // Trigger at 5% profit
+				TrailDrawdownPct:    3.0,   // Stop on 3% drawdown from peak
 			},
 		},
 	}

@@ -142,6 +142,7 @@ type AutoTrader struct {
 	lastBalanceSyncTime   time.Time          // Last balance sync time
 	userID                string             // User ID
 	gridState             *GridState         // Grid trading state (only used when StrategyType == "grid_trading")
+	positionManager       *PositionManager   // Position manager for trailing stop
 }
 
 // NewAutoTrader creates an automatic trader
@@ -363,6 +364,7 @@ func NewAutoTrader(config AutoTraderConfig, st *store.Store, userID string) (*Au
 		peakPnLCacheMutex:     sync.RWMutex{},
 		lastBalanceSyncTime:   time.Now(),
 		userID:                userID,
+		positionManager:       NewPositionManager(),
 	}, nil
 }
 
@@ -1275,6 +1277,15 @@ func (at *AutoTrader) executeOpenLongWithRecord(decision *kernel.Decision, actio
 		logger.Infof("  ⚠ Failed to set take profit: %v", err)
 	}
 
+	// Initialize trailing stop state
+	strategyConfig = at.strategyEngine.GetConfig()
+	if strategyConfig.RiskControl.ConservativeStrategy.EnableTrailingStop && decision.StopLoss > 0 {
+		margin := actualPositionSize / float64(decision.Leverage)
+		at.positionManager.InitTrailingStopWithMargin(decision.Symbol, "long", marketData.CurrentPrice, decision.StopLoss, margin, decision.Leverage)
+		logger.Infof("  📊 Trailing stop initialized: entry=%.4f, stop=%.4f, margin=%.2f, leverage=%dx",
+			marketData.CurrentPrice, decision.StopLoss, margin, decision.Leverage)
+	}
+
 	return nil
 }
 
@@ -1430,6 +1441,15 @@ func (at *AutoTrader) executeOpenShortWithRecord(decision *kernel.Decision, acti
 		logger.Infof("  ⚠ Failed to set take profit: %v", err)
 	}
 
+	// Initialize trailing stop state
+	strategyConfig = at.strategyEngine.GetConfig()
+	if strategyConfig.RiskControl.ConservativeStrategy.EnableTrailingStop && decision.StopLoss > 0 {
+		margin := actualPositionSize / float64(decision.Leverage)
+		at.positionManager.InitTrailingStopWithMargin(decision.Symbol, "short", marketData.CurrentPrice, decision.StopLoss, margin, decision.Leverage)
+		logger.Infof("  📊 Trailing stop initialized: entry=%.4f, stop=%.4f, margin=%.2f, leverage=%dx",
+			marketData.CurrentPrice, decision.StopLoss, margin, decision.Leverage)
+	}
+
 	return nil
 }
 
@@ -1514,6 +1534,9 @@ func (at *AutoTrader) executeCloseLongWithRecord(decision *kernel.Decision, acti
 
 	// Record order to database and poll for confirmation
 	at.recordAndConfirmOrder(order, decision.Symbol, "close_long", quantity, marketData.CurrentPrice, 0, entryPrice)
+
+	// Remove trailing stop state
+	at.positionManager.RemoveTrailingStop(decision.Symbol)
 
 	logger.Infof("  ✓ Position closed successfully")
 	return nil
@@ -1600,6 +1623,9 @@ func (at *AutoTrader) executeCloseShortWithRecord(decision *kernel.Decision, act
 
 	// Record order to database and poll for confirmation
 	at.recordAndConfirmOrder(order, decision.Symbol, "close_short", quantity, marketData.CurrentPrice, 0, entryPrice)
+
+	// Remove trailing stop state
+	at.positionManager.RemoveTrailingStop(decision.Symbol)
 
 	logger.Infof("  ✓ Position closed successfully")
 	return nil
@@ -1877,7 +1903,7 @@ func (at *AutoTrader) GetPositions() ([]map[string]interface{}, error) {
 		// Calculate P&L percentage (based on margin)
 		pnlPct := calculatePnLPercentage(unrealizedPnl, marginUsed)
 
-		result = append(result, map[string]interface{}{
+		posData := map[string]interface{}{
 			"symbol":             symbol,
 			"side":               side,
 			"entry_price":        entryPrice,
@@ -1888,7 +1914,25 @@ func (at *AutoTrader) GetPositions() ([]map[string]interface{}, error) {
 			"unrealized_pnl_pct": pnlPct,
 			"liquidation_price":  liquidationPrice,
 			"margin_used":        marginUsed,
-		})
+		}
+
+		// Add trailing stop info if available
+		if stopState := at.positionManager.GetTrailingStopState(symbol); stopState != nil {
+			posData["trailing_stop"] = map[string]interface{}{
+				"active":          stopState.TrailingActive,
+				"initial_stop":    stopState.InitialStopLoss,
+				"current_stop":    stopState.CurrentStopLoss,
+				"peak_price":      stopState.PeakPrice,
+				"peak_pnl_pct":    stopState.PeakPnLPct,
+				"peak_profit":     stopState.PeakProfit,
+				"margin":          stopState.Margin,
+				"leverage":        stopState.Leverage,
+				"update_count":    stopState.UpdateCount,
+				"last_updated":    stopState.LastUpdated.Format("2006-01-02 15:04:05"),
+			}
+		}
+
+		result = append(result, posData)
 	}
 
 	return result, nil
@@ -2018,6 +2062,64 @@ func (at *AutoTrader) checkPositionDrawdown() {
 			drawdownPct = ((peakPnLPct - currentPnLPct) / peakPnLPct) * 100
 		}
 
+		// === Trailing Stop Logic ===
+		strategyConfig := at.strategyEngine.GetConfig()
+		if strategyConfig.RiskControl.ConservativeStrategy.EnableTrailingStop {
+			// Auto-initialize trailing stop for existing positions if not already initialized
+			if at.positionManager.GetTrailingStopState(symbol) == nil {
+				// Calculate a default stop loss based on entry price and drawdown config
+				drawdownCfg := strategyConfig.RiskControl.ConservativeStrategy.TrailDrawdownPct
+				if drawdownCfg == 0 {
+					drawdownCfg = 3.0 // Default 3%
+				}
+				var defaultStop float64
+				if side == "long" {
+					defaultStop = entryPrice * (1 - drawdownCfg/100)
+				} else {
+					defaultStop = entryPrice * (1 + drawdownCfg/100)
+				}
+				// Calculate margin: position value / leverage
+				positionValue := quantity * entryPrice
+				margin := positionValue / float64(leverage)
+				at.positionManager.InitTrailingStopWithMargin(symbol, side, entryPrice, defaultStop, margin, leverage)
+				logger.Infof("📊 [%s] Auto-initialized trailing stop for existing position: entry=%.4f, stop=%.4f, margin=%.2f, leverage=%dx", symbol, entryPrice, defaultStop, margin, leverage)
+			}
+
+			// Update trailing stop
+			newStop, shouldUpdate, reason := at.positionManager.UpdateTrailingStop(
+				symbol, markPrice, &strategyConfig.RiskControl.ConservativeStrategy)
+
+			if shouldUpdate {
+				logger.Infof("🔄 [%s] %s", symbol, reason)
+				// Cancel existing stop loss orders and set new one
+				at.trader.CancelStopLossOrders(symbol)
+				// Format stop price according to symbol precision
+				formattedStop := FormatStopLossPrice(newStop, symbol)
+				if err := at.trader.SetStopLoss(symbol, side, quantity, formattedStop); err != nil {
+					logger.Infof("❌ [%s] Failed to set trailing stop loss %.4f: %v", symbol, formattedStop, err)
+				} else {
+					logger.Infof("✅ [%s] Trailing stop loss updated to %.4f", symbol, formattedStop)
+				}
+			} else {
+				// Log reason when not updating (for debugging)
+				logger.Infof("📊 [%s] Trailing stop: %s", symbol, reason)
+			}
+
+			// Check if trailing stop is hit
+			hit, hitReason := at.positionManager.CheckStopLossHit(symbol, markPrice)
+			if hit {
+				logger.Infof("🚨 [%s] %s", symbol, hitReason)
+				if err := at.emergencyClosePosition(symbol, side); err != nil {
+					logger.Infof("❌ Trailing stop close failed (%s %s): %v", symbol, side, err)
+				} else {
+					logger.Infof("✅ Trailing stop close succeeded: %s %s", symbol, side)
+					at.ClearPeakPnLCache(symbol, side)
+					at.positionManager.RemoveTrailingStop(symbol)
+				}
+				continue // Skip to next position
+			}
+		}
+
 		// Check close position condition: profit > 5% and drawdown >= 40%
 		if currentPnLPct > 5.0 && drawdownPct >= 40.0 {
 			logger.Infof("🚨 Drawdown close position condition triggered: %s %s | Current profit: %.2f%% | Peak profit: %.2f%% | Drawdown: %.2f%%",
@@ -2057,6 +2159,9 @@ func (at *AutoTrader) emergencyClosePosition(symbol, side string) error {
 	default:
 		return fmt.Errorf("unknown position direction: %s", side)
 	}
+
+	// Remove trailing stop state
+	at.positionManager.RemoveTrailingStop(symbol)
 
 	return nil
 }

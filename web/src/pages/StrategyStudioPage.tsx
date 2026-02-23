@@ -50,8 +50,8 @@ const defaultConservativeStrategyConfig = {
   enable_trend_confirm: false,
   require_multi_timeframe: true,
   enable_trailing_stop: false,
-  trail_after_profit_pct: 2,
-  trail_to_breakeven_at: 5,
+  trail_trigger_pct: 5,
+  trail_drawdown_pct: 3,
 }
 
 // Default values for trading discipline config
@@ -67,6 +67,8 @@ const defaultTradingDisciplineConfig = {
   enable_close_restrictions: false,
   min_loss_pct_for_early_close: -3,
   close_reasoning_min_length: 50,
+  enable_close_signal_check: false,
+  max_signal_score_for_close: 40,
 }
 
 // Helper function to merge config with defaults
@@ -768,12 +770,12 @@ export function StrategyStudioPage() {
                   <div className="flex items-center gap-1 mt-1 flex-wrap">
                     {strategy.is_active && (
                       <span className="px-1.5 py-0.5 text-[10px] rounded bg-nofx-success/15 text-nofx-success">
-                        {t('active')}
+                        {t('strategyActive')}
                       </span>
                     )}
                     {strategy.is_default && (
                       <span className="px-1.5 py-0.5 text-[10px] rounded bg-nofx-gold/15 text-nofx-gold">
-                        {t('default')}
+                        {t('strategyDefault')}
                       </span>
                     )}
                     {strategy.is_public && (

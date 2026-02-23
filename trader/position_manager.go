@@ -13,20 +13,28 @@ import (
 // Position Manager - 持仓管理器
 // ============================================================================
 // 管理持仓的移动止损逻辑
-// 盈利后自动移动止损锁定利润
+// 新逻辑：
+// - 触发：盈利 ≥ 保证金 × 触发百分比（默认5%）
+// - 止损：回撤 ≥ (保证金 + 当前浮盈) × 回撤百分比（默认3%）
 // ============================================================================
 
 // TrailingStopState 移动止损状态
 type TrailingStopState struct {
-	Symbol           string    `json:"symbol"`
-	Side             string    `json:"side"`
-	EntryPrice       float64   `json:"entry_price"`
-	CurrentStopLoss  float64   `json:"current_stop_loss"`
-	PeakPrice        float64   `json:"peak_price"`          // 峰值价格（用于计算最高盈利）
-	PeakPnLPct       float64   `json:"peak_pnl_pct"`        // 峰值盈利百分比
-	TrailingActive   bool      `json:"trailing_active"`     // 是否已激活移动止损
-	LastUpdated      time.Time `json:"last_updated"`
-	UpdateCount      int       `json:"update_count"`        // 更新次数
+	Symbol          string    `json:"symbol"`
+	Side            string    `json:"side"`
+	EntryPrice      float64   `json:"entry_price"`
+	Margin          float64   `json:"margin"`            // 保证金
+	Leverage        int       `json:"leverage"`          // 杠杆
+	InitialStopLoss float64   `json:"initial_stop_loss"` // 初始止损价（AI设定）
+	CurrentStopLoss float64   `json:"current_stop_loss"` // 当前止损价
+	PeakPrice       float64   `json:"peak_price"`        // 峰值价格（达到最高盈利时的价格）
+	PeakProfit      float64   `json:"peak_profit"`       // 峰值盈利（USDT）
+	TrailingActive  bool      `json:"trailing_active"`   // 是否已激活移动止损
+	LastUpdated     time.Time `json:"last_updated"`
+	UpdateCount     int       `json:"update_count"` // 更新次数
+
+	// 兼容旧字段
+	PeakPnLPct float64 `json:"peak_pnl_pct"` // 废弃，保留兼容
 }
 
 // PositionManager 持仓管理器
@@ -44,6 +52,11 @@ func NewPositionManager() *PositionManager {
 
 // InitTrailingStop 初始化移动止损状态
 func (pm *PositionManager) InitTrailingStop(symbol, side string, entryPrice, initialStopLoss float64) {
+	pm.InitTrailingStopWithMargin(symbol, side, entryPrice, initialStopLoss, 0, 10)
+}
+
+// InitTrailingStopWithMargin 初始化移动止损状态（带保证金和杠杆）
+func (pm *PositionManager) InitTrailingStopWithMargin(symbol, side string, entryPrice, initialStopLoss, margin float64, leverage int) {
 	pm.mu.Lock()
 	defer pm.mu.Unlock()
 
@@ -51,17 +64,22 @@ func (pm *PositionManager) InitTrailingStop(symbol, side string, entryPrice, ini
 		Symbol:          symbol,
 		Side:            side,
 		EntryPrice:      entryPrice,
+		Margin:          margin,
+		Leverage:        leverage,
+		InitialStopLoss: initialStopLoss,
 		CurrentStopLoss: initialStopLoss,
 		PeakPrice:       entryPrice,
-		PeakPnLPct:      0,
+		PeakProfit:      0,
 		TrailingActive:  false,
 		LastUpdated:     time.Now().UTC(),
 		UpdateCount:     0,
 	}
 }
 
-// UpdateTrailingStop 更新移动止损
-// 返回：新的止损价格，是否需要更新，错误信息
+// UpdateTrailingStop 更新移动止损（新的保证金回撤模式）
+// 触发条件：盈利 ≥ 保证金 × 触发百分比
+// 止损条件：回撤 ≥ (保证金 + 当前浮盈) × 回撤百分比
+// 返回：新的止损价格，是否需要更新，原因说明
 func (pm *PositionManager) UpdateTrailingStop(
 	symbol string,
 	currentPrice float64,
@@ -69,6 +87,16 @@ func (pm *PositionManager) UpdateTrailingStop(
 ) (newStopLoss float64, shouldUpdate bool, reason string) {
 	if !config.EnableTrailingStop {
 		return 0, false, ""
+	}
+
+	// 使用默认值处理零值情况（兼容旧配置）
+	triggerPct := config.TrailTriggerPct
+	if triggerPct == 0 {
+		triggerPct = 5.0 // 默认5%触发
+	}
+	drawdownPct := config.TrailDrawdownPct
+	if drawdownPct == 0 {
+		drawdownPct = 3.0 // 默认3%回撤
 	}
 
 	pm.mu.Lock()
@@ -79,70 +107,102 @@ func (pm *PositionManager) UpdateTrailingStop(
 		return 0, false, "未找到持仓状态"
 	}
 
-	// 计算当前盈利百分比
-	pnlPct := pm.calculatePnLPct(state.EntryPrice, currentPrice, state.Side)
+	// 计算当前盈利（USDT）
+	// 盈利 = 价格变动% × 杠杆 × 保证金
+	priceChangePct := pm.calculatePriceChangePct(state.EntryPrice, currentPrice, state.Side)
+	currentProfit := state.Margin * float64(state.Leverage) * priceChangePct / 100
 
-	// 更新峰值价格
-	if pnlPct > state.PeakPnLPct {
+	// 更新峰值（始终更新，不管是否触发）
+	if currentProfit > state.PeakProfit {
 		state.PeakPrice = currentPrice
-		state.PeakPnLPct = pnlPct
+		state.PeakProfit = currentProfit
 	}
 
 	// 检查是否触发移动止损
-	if pnlPct < config.TrailAfterProfitPct {
-		// 尚未达到触发阈值
-		return 0, false, fmt.Sprintf("盈利%.2f%%未达到触发阈值%.2f%%", pnlPct, config.TrailAfterProfitPct)
-	}
+	// 触发条件：盈利 ≥ 保证金 × 触发百分比
+	triggerThreshold := state.Margin * triggerPct / 100
 
-	// 激活移动止损
-	state.TrailingActive = true
-
-	// 计算新的止损价格
-	var calculatedStopLoss float64
-
-	if pnlPct >= config.TrailToBreakevenAt {
-		// 盈利超过阈值，移至成本价
-		calculatedStopLoss = state.EntryPrice
-		reason = fmt.Sprintf("盈利%.2f%%达到%.2f%%阈值，止损移至成本价", pnlPct, config.TrailToBreakevenAt)
-	} else {
-		// 盈利未达到breakeven阈值，移动到盈利的一半位置
-		trailPct := pnlPct * 0.5
-		if state.Side == "long" {
-			calculatedStopLoss = state.EntryPrice * (1 + trailPct/100)
-		} else {
-			calculatedStopLoss = state.EntryPrice * (1 - trailPct/100)
+	if !state.TrailingActive {
+		if currentProfit >= triggerThreshold {
+			// 触发移动止损
+			state.TrailingActive = true
+			newStop := pm.calculateProfitBasedStop(state, currentPrice, currentProfit, drawdownPct)
+			state.CurrentStopLoss = newStop
+			state.LastUpdated = time.Now().UTC()
+			state.UpdateCount++
+			return newStop, true, fmt.Sprintf("触发移动止损：盈利%.2f USDT ≥ 保证金×%.0f%% (%.2f USDT)，止损价 %.4f",
+				currentProfit, triggerPct, triggerThreshold, newStop)
 		}
-		reason = fmt.Sprintf("盈利%.2f%%，止损移至+%.2f%%位置", pnlPct, trailPct)
+		return 0, false, fmt.Sprintf("盈利%.2f USDT < 触发阈值%.2f USDT (保证金×%.0f%%)", currentProfit, triggerThreshold, triggerPct)
 	}
 
-	// 只移动不回退（止损只能往盈利方向移动）
+	// 已触发追踪，计算新的止损价格
+	newStop := pm.calculateProfitBasedStop(state, currentPrice, currentProfit, drawdownPct)
+
+	// 止损只能朝有利方向移动（做多只能上移，做空只能下移）
 	if state.Side == "long" {
-		if calculatedStopLoss <= state.CurrentStopLoss {
-			return 0, false, "止损价格未改善（只能往盈利方向移动）"
+		if newStop <= state.CurrentStopLoss {
+			return 0, false, "止损未提高"
 		}
 	} else {
-		if calculatedStopLoss >= state.CurrentStopLoss && state.CurrentStopLoss > 0 {
-			return 0, false, "止损价格未改善（只能往盈利方向移动）"
+		if newStop >= state.CurrentStopLoss {
+			return 0, false, "止损未降低"
 		}
 	}
 
-	// 添加缓冲区间（0.3%）避免假突破触发
-	bufferPct := 0.3
-	if state.Side == "long" {
-		calculatedStopLoss = calculatedStopLoss * (1 - bufferPct/100)
-	} else {
-		calculatedStopLoss = calculatedStopLoss * (1 + bufferPct/100)
-	}
-
-	// 更新状态
-	state.CurrentStopLoss = calculatedStopLoss
+	// 更新止损
+	oldStop := state.CurrentStopLoss
+	state.CurrentStopLoss = newStop
 	state.LastUpdated = time.Now().UTC()
 	state.UpdateCount++
 
-	return calculatedStopLoss, true, reason
+	return newStop, true, fmt.Sprintf("止损更新：%.4f → %.4f（峰值盈利%.2f USDT）", oldStop, newStop, state.PeakProfit)
 }
 
-// calculatePnLPct 计算盈利百分比
+// calculateProfitBasedStop 基于盈利的止损价格计算
+// 当回撤达到 (保证金 + 当前浮盈) × 回撤百分比 时触发
+func (pm *PositionManager) calculateProfitBasedStop(state *TrailingStopState, currentPrice, currentProfit, drawdownPct float64) float64 {
+	// 止损阈值 = (保证金 + 峰值盈利) × 回撤百分比
+	// 即：当盈利从峰值回撤这么多时，触发止损
+	drawdownThreshold := (state.Margin + state.PeakProfit) * drawdownPct / 100
+
+	// 峰值盈利 - 止损阈值 = 允许保留的最低盈利
+	minProfit := state.PeakProfit - drawdownThreshold
+
+	// 计算对应的止损价格
+	// 盈利 = 保证金 × 杠杆 × 价格变动%
+	// 价格变动% = 盈利 / (保证金 × 杠杆)
+	if state.Margin == 0 || state.Leverage == 0 {
+		return state.PeakPrice // 无法计算，返回峰值价
+	}
+
+	minPriceChangePct := minProfit / (state.Margin * float64(state.Leverage)) * 100
+
+	var stopPrice float64
+	if state.Side == "long" {
+		// 做多：止损价 = 入场价 × (1 + 最低价格变动%)
+		stopPrice = state.EntryPrice * (1 + minPriceChangePct/100)
+	} else {
+		// 做空：止损价 = 入场价 × (1 - 最低价格变动%)
+		stopPrice = state.EntryPrice * (1 - minPriceChangePct/100)
+	}
+
+	return stopPrice
+}
+
+// calculatePriceChangePct 计算价格变动百分比（不含杠杆）
+func (pm *PositionManager) calculatePriceChangePct(entryPrice, currentPrice float64, side string) float64 {
+	if entryPrice == 0 {
+		return 0
+	}
+
+	if side == "long" {
+		return (currentPrice - entryPrice) / entryPrice * 100
+	}
+	return (entryPrice - currentPrice) / entryPrice * 100
+}
+
+// calculatePnLPct 计算盈利百分比（基于保证金，已废弃）
 func (pm *PositionManager) calculatePnLPct(entryPrice, currentPrice float64, side string) float64 {
 	if entryPrice == 0 {
 		return 0
@@ -208,10 +268,11 @@ func (pm *PositionManager) CheckStopLossHit(symbol string, currentPrice float64)
 	return false, ""
 }
 
-// CalculateTrailingStop 便捷函数：计算移动止损价格
+// CalculateTrailingStop 便捷函数：计算移动止损价格（废弃，保留兼容）
 func CalculateTrailingStop(
 	entryPrice float64,
 	currentPrice float64,
+	peakPrice float64,
 	side string,
 	config *store.ConservativeStrategyConfig,
 ) (newStopLoss float64, shouldUpdate bool) {
@@ -228,43 +289,43 @@ func CalculateTrailingStop(
 	}
 
 	// 检查是否触发
-	if pnlPct < config.TrailAfterProfitPct {
+	triggerPct := config.TrailTriggerPct
+	if triggerPct == 0 {
+		triggerPct = 5.0
+	}
+	if pnlPct < triggerPct {
 		return 0, false
 	}
 
-	// 计算新的止损价格
-	if pnlPct >= config.TrailToBreakevenAt {
-		// 移至成本价
-		return entryPrice, true
+	// 使用实际峰值价格计算止损
+	drawdownPct := config.TrailDrawdownPct
+	if drawdownPct == 0 {
+		drawdownPct = 3.0
 	}
-
-	// 移至盈利一半位置
-	trailPct := pnlPct * 0.5
+	drawdown := drawdownPct / 100
 	if side == "long" {
-		newStopLoss = entryPrice * (1 + trailPct/100)
+		newStopLoss = peakPrice * (1 - drawdown)
 	} else {
-		newStopLoss = entryPrice * (1 - trailPct/100)
-	}
-
-	// 添加缓冲
-	bufferPct := 0.3
-	if side == "long" {
-		newStopLoss = newStopLoss * (1 - bufferPct/100)
-	} else {
-		newStopLoss = newStopLoss * (1 + bufferPct/100)
+		newStopLoss = peakPrice * (1 + drawdown)
 	}
 
 	return newStopLoss, true
 }
 
 // FormatStopLossPrice 格式化止损价格（根据价格精度）
+// 使用保守的精度规则以避免 Binance API 精度错误
 func FormatStopLossPrice(price float64, symbol string) float64 {
-	// 根据价格大小决定精度
-	if price >= 1000 {
+	// 根据价格大小决定精度（保守策略）
+	// 大多数交易对使用以下精度：
+	// - 价格 >= 10: 2位小数
+	// - 价格 >= 1: 3位小数
+	// - 价格 >= 0.1: 4位小数
+	// - 价格 < 0.1: 5位小数
+	if price >= 10 {
 		return math.Round(price*100) / 100 // 2位小数
 	} else if price >= 1 {
 		return math.Round(price*1000) / 1000 // 3位小数
-	} else if price >= 0.01 {
+	} else if price >= 0.1 {
 		return math.Round(price*10000) / 10000 // 4位小数
 	}
 	return math.Round(price*100000) / 100000 // 5位小数

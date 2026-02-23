@@ -29,6 +29,20 @@ export interface AccountInfo {
   margin_used_pct: number
 }
 
+// Trailing stop state for position display
+export interface TrailingStopState {
+  active: boolean
+  initial_stop: number
+  current_stop: number
+  peak_price: number
+  peak_pnl_pct: number // deprecated, kept for compatibility
+  peak_profit: number // 峰值盈利（USDT）
+  margin: number // 保证金
+  leverage: number // 杠杆
+  update_count: number
+  last_updated: string
+}
+
 export interface Position {
   symbol: string
   side: string
@@ -40,6 +54,7 @@ export interface Position {
   unrealized_pnl_pct: number
   liquidation_price: number
   margin_used: number
+  trailing_stop?: TrailingStopState
 }
 
 export interface DecisionAction {
@@ -67,6 +82,50 @@ export interface SignalScore {
   volume_price_score: number  // Volume-price alignment score (0-20)
   multi_tf_score: number  // Multi-timeframe resonance score (0-30)
   details?: string        // Score details
+  // Detailed sub-scores
+  rsi_sub_score?: RSISubScore
+  ema_sub_score?: EMASubScore
+  volume_sub_score?: VolumeSubScore
+  multi_tf_sub_score?: MultiTFSubScore
+}
+
+// RSI sub-score details
+export interface RSISubScore {
+  position_score: number   // RSI position score (0-15)
+  trend_score: number      // RSI trend score (0-5)
+  diverge_score: number    // RSI divergence score (0-5)
+  rsi_value: number        // Current RSI value
+  rsi_trend: string        // RSI trend: "up", "down", "sideways"
+  has_divergence: boolean  // Has divergence
+}
+
+// EMA sub-score details
+export interface EMASubScore {
+  price_pos_score: number  // Price position score (0-8)
+  alignment_score: number  // EMA alignment score (0-9)
+  slope_score: number      // EMA slope score (0-8)
+  price_vs_ema20: number   // Price vs EMA20 deviation %
+  ema_alignment: string    // EMA alignment state
+  ema_slope: string        // EMA slope direction
+}
+
+// Volume sub-score details
+export interface VolumeSubScore {
+  oi_price_score: number   // OI+price score (0-10)
+  volume_score: number     // Volume score (0-5)
+  diverge_score: number    // Volume divergence score (0-5)
+  oi_change: number        // OI change %
+  volume_ratio: number     // Volume ratio
+  has_divergence: boolean  // Has volume divergence
+}
+
+// Multi-timeframe sub-score details
+export interface MultiTFSubScore {
+  short_tf_score: number           // Short timeframe score (0-8)
+  mid_tf_score: number             // Mid timeframe score (0-10)
+  long_tf_score: number            // Long timeframe score (0-12)
+  tf_trends: Record<string, string> // Timeframe trends
+  tf_alignment: string             // Overall alignment state
 }
 
 // Trend analysis result
@@ -640,6 +699,10 @@ export interface TradingDisciplineConfig {
   enable_close_restrictions: boolean;  // Enable close position restrictions
   min_loss_pct_for_early_close: number; // Min loss % to allow early close (negative, e.g., -3.0)
   close_reasoning_min_length: number;  // Min characters for close reasoning
+
+  // === Close Signal Check ===
+  enable_close_signal_check: boolean;  // Enable signal check before closing
+  max_signal_score_for_close: number;  // Max signal score to allow close (0-100, default: 40)
 }
 
 // Conservative Strategy Configuration (CODE ENFORCED)
@@ -658,10 +721,10 @@ export interface ConservativeStrategyConfig {
   enable_trend_confirm: boolean;       // Enable trend confirmation
   require_multi_timeframe: boolean;    // Require multi-timeframe trend confirmation (15M + 1H must align)
 
-  // === Trailing Stop ===
+  // === Trailing Stop (Drawdown Mode) ===
   enable_trailing_stop: boolean;       // Enable trailing stop-loss
-  trail_after_profit_pct: number;      // Profit percentage to trigger trailing stop (default: 2%)
-  trail_to_breakeven_at: number;       // Profit percentage to move stop-loss to breakeven (default: 5%)
+  trail_trigger_pct: number;           // Profit percentage to trigger trailing (default: 5%)
+  trail_drawdown_pct: number;          // Drawdown percentage to trigger stop (default: 3%)
 }
 
 export interface RiskControlConfig {
@@ -905,4 +968,40 @@ export interface GridRiskInfo {
   // Breakout state
   breakout_level: string
   breakout_direction: string
+}
+
+// Indicator preset types
+export interface IndicatorPreset {
+  id: string
+  name: { zh: string; en: string }
+  description: { zh: string; en: string }
+  icon: string
+  color: string
+  primary_timeframe: string
+  recommended_timeframes: string[]
+  indicators: {
+    enable_ema: boolean
+    ema_periods: number[]
+    enable_macd: boolean
+    enable_rsi: boolean
+    rsi_periods: number[]
+    enable_atr: boolean
+    atr_periods: number[]
+    enable_boll: boolean
+    boll_periods: number[]
+    enable_volume: boolean
+    enable_oi: boolean
+    enable_funding_rate: boolean
+  }
+  kline_count: number
+  risk_note?: { zh: string; en: string }
+}
+
+export interface IndicatorInfo {
+  key: string
+  name: { zh: string; en: string }
+  description: { zh: string; en: string }
+  recommended_ranges: string
+  tips: { zh: string; en: string }
+  color: string
 }
