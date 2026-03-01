@@ -44,6 +44,17 @@ log_success() { echo -e "${GREEN}[SUCCESS]${NC} $1"; }
 log_warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
 log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 
+# Check dependencies
+if ! command -v tmux &> /dev/null; then
+    log_error "tmux is not installed. Install it with: brew install tmux"
+    exit 1
+fi
+
+if ! command -v claude &> /dev/null; then
+    log_error "claude CLI is not installed. Install Claude Code first."
+    exit 1
+fi
+
 # Check arguments
 if [[ $# -lt 2 ]]; then
     usage
