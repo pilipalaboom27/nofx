@@ -18,6 +18,8 @@ import (
 	"nofx/provider/coinank/coinank_enum"
 	"nofx/provider/hyperliquid"
 	"nofx/provider/twelvedata"
+	"os"
+	"strings"
 	"nofx/store"
 	"nofx/trader"
 	"nofx/trader/aster"
@@ -86,12 +88,34 @@ func NewServer(traderManager *manager.TraderManager, st *store.Store, cryptoServ
 	return s
 }
 
-// corsMiddleware CORS middleware
+// corsMiddleware CORS middleware with configurable origins
 func corsMiddleware() gin.HandlerFunc {
+	// Get allowed origins from environment variable
+	allowedOrigins := os.Getenv("ALLOWED_ORIGINS")
+	if allowedOrigins == "" {
+		// Default to localhost only for development
+		allowedOrigins = "http://localhost:3000,http://127.0.0.1:3000"
+	}
+	originsList := strings.Split(allowedOrigins, ",")
+
 	return func(c *gin.Context) {
-		c.Writer.Header().Set("Access-Control-Allow-Origin", "*")
+		origin := c.Request.Header.Get("Origin")
+		
+		// Check if origin is in allowed list
+		allowed := false
+		for _, allowedOrigin := range originsList {
+			if strings.TrimSpace(allowedOrigin) == origin {
+				allowed = true
+				break
+			}
+		}
+
+		if allowed {
+			c.Writer.Header().Set("Access-Control-Allow-Origin", origin)
+		}
 		c.Writer.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
 		c.Writer.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+		c.Writer.Header().Set("Access-Control-Allow-Credentials", "true")
 
 		if c.Request.Method == "OPTIONS" {
 			c.AbortWithStatus(http.StatusOK)
