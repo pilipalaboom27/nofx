@@ -67,8 +67,12 @@ func Init() {
 	if v := os.Getenv("JWT_SECRET"); v != "" {
 		cfg.JWTSecret = strings.TrimSpace(v)
 	}
+	// SECURITY: JWT secret is required, no default value
 	if cfg.JWTSecret == "" {
-		cfg.JWTSecret = "default-jwt-secret-change-in-production"
+		log.Fatal("JWT_SECRET environment variable is required. Generate one with: openssl rand -base64 32")
+	}
+	if len(cfg.JWTSecret) < 32 {
+		log.Fatal("JWT_SECRET must be at least 32 characters long for security")
 	}
 
 	if v := os.Getenv("REGISTRATION_ENABLED"); v != "" {
